@@ -26,7 +26,7 @@ class Model(metaclass=ModelMetaclass):
         for name, value in kwargs.items():
             setattr(self, name, value)
 
-    def get_store_fields_instance(self) -> dict[str, Field]:
+    def get_store_fields_instance(self):
         store_fields = {}
         for field_name, annotation in self.get_store_fields_dict().items():
             field = getattr(self, field_name)
@@ -36,8 +36,28 @@ class Model(metaclass=ModelMetaclass):
                 store_fields[field_name] = field
         return store_fields
 
+    def get_fields_instance(self):
+        fields = {}
+        for field_name, annotation in self.get_fields().items():
+            field = getattr(self, field_name)
+            if isinstance(field, Field):
+                fields[field_name] = field.default
+            else:
+                fields[field_name] = field
+        return fields
+
     def to_dict(self, include={}, exclude={}, exclude_none=False):
         fields = self.get_store_fields_instance()
+        if include:
+            fields = {k: v for k, v in fields.items() if k in include}
+        if exclude:
+            fields = {k: v for k, v in fields.items() if not k in exclude}
+        if exclude_none:
+            fields = {k: v for k, v in fields.items() if v is not None}
+        return fields
+
+    def json(self, include={}, exclude={}, exclude_none=False):
+        fields = self.get_fields_instance()
         if include:
             fields = {k: v for k, v in fields.items() if k in include}
         if exclude:

@@ -13,11 +13,15 @@ class MysqlPool:
             cls.instance = super().__new__(cls)
         return cls.instance
 
+    # def __init__(self):
+    #     self.mysql_pool_no_auto_commit: aiomysql.Pool
+    #     self.mysql_pool: aiomysql.Pool
+
     # РАБОТА С ПУЛОМ
     async def mysql_connect(self, settings):
         try:
             start_time: float = time.time()
-            self.mysql_pool_no_auto_commit = await aiomysql.create_pool(
+            self.mysql_pool_no_auto_commit: aiomysql.Pool = await aiomysql.create_pool(
                 minsize=5,
                 maxsize=15,
                 host=settings.db_portal_host,
@@ -30,7 +34,7 @@ class MysqlPool:
                 pool_recycle=60 * 15,
             )
             start_time: float = time.time()
-            self.mysql_pool = await aiomysql.create_pool(
+            self.mysql_pool: aiomysql.Pool = await aiomysql.create_pool(
                 minsize=6,
                 maxsize=15,
                 host=settings.db_portal_host,

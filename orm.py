@@ -69,7 +69,9 @@ class DotModel(Builder):
         # TODO: создание relations полей
 
     # @class_or_instancemethod
-    async def update(self, payload: Self, fields=[], session=None):
+    async def update(self, payload: Self | None = None, fields=[], session=None):
+        if not payload:
+            payload = self
         stmt, values, func_prepare, func_cur = await self.build_update(payload, fields)
         if session:
             await session.execute(stmt, values, func_prepare, func_cur)
