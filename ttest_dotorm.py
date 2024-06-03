@@ -65,7 +65,7 @@ class Message(DotModel):
     send_email: bool | None = Boolean(_store=False, default=None)
     send_telegram: bool | None = Boolean(_store=False, default=None)
 
-    users_ids: list[User] = Many2many(
+    users_ids: list[MessageAttribute] = Many2many(
         store=False,
         relation_table=User,
         many2many_table="messageuser",
@@ -73,7 +73,7 @@ class Message(DotModel):
         column2="messageid",
     )
 
-    message_attributes_id: list[MessageAttribute] = One2many(
+    message_attributes_id: MessageAttribute = One2one(
         store=False,
         relation_table=MessageAttribute,
         relation_table_field="message_id",

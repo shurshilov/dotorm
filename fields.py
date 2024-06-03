@@ -222,7 +222,7 @@ class Many2one(Field[Type[T]]):
         super().__init__(**kwargs)
 
 
-class Many2many(Field[list[T]]):
+class Many2many(Field[list[Type[T]]]):
     """
     Many2many field.
     """
@@ -232,7 +232,7 @@ class Many2many(Field[list[T]]):
 
     def __init__(
         self,
-        relation_table: Type,
+        relation_table: Type[T],
         many2many_table: str,
         column1: str,
         column2: str,
@@ -266,7 +266,7 @@ class One2many(Field[list[Type[T]]]):
         super().__init__(**kwargs)
 
 
-class One2one(Field[Type]):
+class One2one(Field[T]):
     """
     One2one field.
     """
