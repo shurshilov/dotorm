@@ -1,9 +1,8 @@
 import datetime
 from typing import Self
-
-from exceptions import OrmUpdateEmptyParamsException
-from fields import Many2many, Many2one, One2many, One2one
-from model import Model
+from .exceptions import OrmUpdateEmptyParamsException
+from .fields import Many2many, Many2one, One2many, One2one
+from .model import Model
 
 
 # T = TypeVar("T", bound=Model)
@@ -202,7 +201,7 @@ class Builder(Model):
         if not fields:
             fields = cls.get_store_fields()
         else:
-            fields = ",".join(fields)
+            fields = fields
         where = ""
         where_values = ()
         if filter:

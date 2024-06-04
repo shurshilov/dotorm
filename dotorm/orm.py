@@ -1,10 +1,9 @@
 import asyncio
 from typing import Self, TypeVar
 
+from .builder import Builder
 
-from builder import Builder
-
-from databases.mysql_session import MysqlSessionWithPool
+from .databases.mysql_session import MysqlSessionWithPool
 
 # from model import Model
 

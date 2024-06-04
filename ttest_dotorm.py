@@ -1,9 +1,8 @@
 import asyncio
 import datetime
-from typing import Any
 
-from orm import DotModel
-from fields import Boolean, Char, Integer, Many2many, One2many, One2one
+from dotorm.orm import DotModel
+from dotorm.fields import Boolean, Char, Integer, Many2many, One2many, One2one
 
 
 class MessageAttribute(DotModel):
@@ -106,7 +105,7 @@ async def main():
     print(query)
     query = await Message.build_search(filter={"id": 5})
     print(query)
-    query = await Message.build_search(fields=["id", "date"])
+    query = await Message.build_search(fields="id,date")
     print(query)
     query = await Message.build_search(filter={"id": [1, 2, 3]})
     print(query)

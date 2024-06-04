@@ -1,12 +1,11 @@
 from abc import ABCMeta
-import datetime
 from typing import (
     Any,
     ClassVar,
     dataclass_transform,
 )
 
-from fields import Boolean, Field, Integer, Char, Many2many, Many2one, One2one
+from .fields import Field, Many2one
 
 
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))

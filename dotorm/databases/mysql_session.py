@@ -1,7 +1,7 @@
 import aiomysql
 from .mysql_pool import mysqlPoolObject
 
-from exceptions import (
+from ..exceptions import (
     MysqlConnectionExecuteException,
     MysqlQueryExecuteException,
 )
