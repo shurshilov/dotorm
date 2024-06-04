@@ -1,10 +1,7 @@
 import aiomysql
-from .mysql_pool import mysqlPoolObject
 
-from ..exceptions import (
-    MysqlConnectionExecuteException,
-    MysqlQueryExecuteException,
-)
+from ..exceptions import MysqlConnectionExecuteException, MysqlQueryExecuteException
+from .mysql_pool import mysqlPoolObject
 
 
 class MysqlSessionWithTransactionSingleConnection:

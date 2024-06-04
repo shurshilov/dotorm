@@ -1,9 +1,5 @@
 from abc import ABCMeta
-from typing import (
-    Any,
-    ClassVar,
-    dataclass_transform,
-)
+from typing import Any, ClassVar, dataclass_transform
 
 from .fields import Field, Many2one
 

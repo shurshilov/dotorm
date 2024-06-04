@@ -1,6 +1,6 @@
 import datetime
-from typing import Any, Type, TypeVar
 from decimal import Decimal
+from typing import Any, Type, TypeVar
 
 T = TypeVar("T")
 

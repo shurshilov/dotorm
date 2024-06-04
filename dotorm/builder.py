@@ -1,9 +1,9 @@
 import datetime
 from typing import Self
-from .exceptions import OrmUpdateEmptyParamsException
-from .fields import Many2many, Many2one, One2many, One2one
-from .model import Model
 
+from .exceptions import OrmUpdateEmptyParamsException
+from .fields import Field, Many2many, Many2one, One2many, One2one
+from .model import Model
 
 # T = TypeVar("T", bound=Model)
 
@@ -333,14 +333,20 @@ class Builder(Model):
             ]
 
         for name, field in relation_fields:
-            relation = field.relation or False
-            relation_table = field.relation_table or None
-            relation_table_field = field.relation_table_field or None
+            if isinstance(field, Field):
+                relation = field.relation or False
+                if not relation:
+                    continue
+                # field_obj = getattr(payload, field_name)
+                relation_table = field.relation_table or None
+                relation_table_field = field.relation_table_field or False
+            else:
+                continue
 
             if isinstance(field, Many2many):
                 field_name_list.append(name)
                 request_list.append(
-                    await self_or_cls.build_get_many2many(
+                    await cls.build_get_many2many(
                         id,
                         relation_table,
                         field.many2many_table or False,
@@ -388,12 +394,15 @@ class Builder(Model):
 
         # TODO: обновление relations полей
         # get_relation_fields
-        for field_name, field_obj in payload.get_fields().items():
-            field = self.get_field(field_name)
-            relation = field.relation or False
-            if not relation:
+        for field_name, field in payload.get_fields().items():
+            if isinstance(field, Field):
+                relation = field.relation or False
+                if not relation:
+                    continue
+                field_obj = getattr(payload, field_name)
+                relation_table_field = field.relation_table_field or False
+            else:
                 continue
-            relation_table_field = field.relation_table_field or False
 
             if isinstance(field, Many2many):
                 ...
@@ -411,18 +420,16 @@ class Builder(Model):
                 for obj in field_obj:
                     request_list.append(
                         await obj.build_update_one2one(
-                            fk_id=id, fk=relation_table_field
+                            fk_id=payload.id, fk=relation_table_field
                         )
                     )
             elif isinstance(field, One2one):
                 request_list.append(
                     await field_obj.build_update_one2one(
-                        fk_id=id, fk=relation_table_field
+                        fk_id=payload.id, fk=relation_table_field
                     )
                 )
         return request_list
-        # results = await asyncio.gather(*request_list)
-        # return results
 
     @classmethod
     async def build_create_with_relations(cls, payload, id=None):
@@ -432,13 +439,15 @@ class Builder(Model):
 
         # TODO: обновление relations полей
         # get_relation_fields
-        for field_name, field_obj in payload:
-            field = cls.get_field(field_name)
-            relation = field.relation or False
-            if not relation:
+        for field_name, field in payload:
+            if isinstance(field, Field):
+                relation = field.relation or False
+                if not relation:
+                    continue
+                field_obj = getattr(payload, field_name)
+                relation_table_field = field.relation_table_field or False
+            else:
                 continue
-            # relation_table = field.get("relation_table", False)
-            relation_table_field = field.relation_table_field or False
 
             if isinstance(field, Many2many):
                 ...
@@ -456,15 +465,13 @@ class Builder(Model):
                 for obj in field_obj:
                     request_list.append(
                         await obj.build_create_one2one(
-                            fk_id=id, fk=relation_table_field
+                            fk_id=payload.id, fk=relation_table_field
                         )
                     )
             elif isinstance(field, One2one):
                 request_list.append(
                     await field_obj.build_create_one2one(
-                        fk_id=id, fk=relation_table_field
+                        fk_id=payload.id, fk=relation_table_field
                     )
                 )
         return request_list
-        # results = await asyncio.gather(*request_list)
-        # return results
