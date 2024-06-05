@@ -1,5 +1,5 @@
 import datetime
-from typing import Self
+from typing import Any, Self
 
 from .exceptions import OrmUpdateEmptyParamsException
 from .fields import Field, Many2many, Many2one, One2many, One2one
@@ -194,7 +194,7 @@ class Builder(Model):
         limit=None,
         order="DESC",
         sort="id",
-        filter=None,
+        filter:Any=None,
         fields=[],
         raw=None,
     ):
