@@ -91,7 +91,7 @@ class Message(DotModel):
 #     print(query)
 
 
-class TestStuff(unittest.IsolatedAsyncioTestCase):
+class TestBuilder(unittest.IsolatedAsyncioTestCase):
     def test_relation_fields(self):
         fields_relation = Message.get_relation_fields()
         print(fields_relation)
@@ -195,26 +195,35 @@ class TestStuff(unittest.IsolatedAsyncioTestCase):
             "SELECT COUNT(*) FROM message",
         )
 
-    # async def test_builder_build_update_one2one(self):
-    #     query = await Message.build_update_one2one()
-    #     self.assertEqual(
-    #         query[0],
-    #         "SELECT COUNT(*) FROM message",
-    #     )
+    async def test_builder_build_update_one2one(self):
+        msg_attr = MessageAttribute(id=5, show_in_account=True)
+        query = await msg_attr.build_update_one2one(fk_id=100, fk="message_id")
+        self.assertEqual(
+            query[0],
+            "\n            UPDATE message_attributes\n            SET show_in_account=%s\n            WHERE message_id = %s\n        ",
+        )
 
-    # async def test_builder_build_create_one2one(self):
-    #     query = await Message.build_create_one2one()
-    #     self.assertEqual(
-    #         query[0],
-    #         "SELECT COUNT(*) FROM message",
-    #     )
+    async def test_builder_build_create_one2one(self):
+        msg_attr = MessageAttribute(id=5, show_in_account=True)
+        query = await msg_attr.build_create_one2one(fk_id=100, fk="message_id")
+        self.assertEqual(
+            query[0],
+            "\n            INSERT INTO message_attributes (message_id, show_in_account)\n            VALUES (%s, %s)\n        ",
+        )
 
-    # async def test_builder_build_get_with_relations(self):
-    #     query = await Message.build_get_with_relations()
-    #     self.assertEqual(
-    #         query[0],
-    #         "SELECT COUNT(*) FROM message",
-    #     )
+    async def test_builder_build_get_with_relations(self):
+        query = await Message.build_get_with_relations(
+            100, relation_fields=["message_attributes_id"]
+        )
+        self.assertEqual(
+            query[0][0][0],
+            "            SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram,clientid,show_in_account,send_email,send_telegram            FROM message            WHERE id = %s            LIMIT 1        ",
+        )
+
+        self.assertEqual(
+            query[0][1][0],
+            "\n            select id,date_create,publish_date,message_id,is_deleted,is_draft,show_in_account,send_email,send_telegram\n            from message_attributes\n            WHERE message_id = %s\n            ORDER BY id DESC\n        LIMIT %s",
+        )
 
     # async def test_builder_build_update_with_relations(self):
     #     query = await Message.build_update_with_relations()

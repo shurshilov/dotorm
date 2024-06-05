@@ -111,8 +111,15 @@ async def main():
     print(query)
     query = await Message.build_table_len()
     print(query)
-    # query = await msg.build_update_one2one(fk_id="message_id")
-    # print(query)
+    msg_attr = MessageAttribute(id=5, show_in_account=True)
+    query = await msg_attr.build_update_one2one(fk_id=100, fk="message_id")
+    print(query)
+    query = await msg_attr.build_create_one2one(fk_id=100, fk="message_id")
+    print(query)
+    query = await Message.build_get_with_relations(
+        100, relation_fields=["message_attributes_id"]
+    )
+    print(query)
 
 
 def test_answer():
