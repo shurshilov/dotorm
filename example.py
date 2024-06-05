@@ -120,6 +120,17 @@ async def main():
         100, relation_fields=["message_attributes_id"]
     )
     print(query)
+    msg = Message(id=5, language="ru")
+    msg_attr = MessageAttribute(id=5, show_in_account=True)
+    msg.message_attributes_id = msg_attr
+    query = await msg.build_update_with_relations()
+    print(query)
+
+    msg = Message(id=5, language="ru")
+    msg_attr = MessageAttribute(id=5, show_in_account=True)
+    msg.message_attributes_id = msg_attr
+    query = await Message.build_create_with_relations(msg)
+    print(query)
 
 
 def test_answer():

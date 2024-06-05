@@ -439,7 +439,7 @@ class Builder(Model):
 
         # TODO: обновление relations полей
         # get_relation_fields
-        for field_name, field in payload:
+        for field_name, field in payload.get_fields().items():
             if isinstance(field, Field):
                 relation = field.relation or False
                 if not relation:

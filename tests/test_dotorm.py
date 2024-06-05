@@ -225,16 +225,44 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
             "\n            select id,date_create,publish_date,message_id,is_deleted,is_draft,show_in_account,send_email,send_telegram\n            from message_attributes\n            WHERE message_id = %s\n            ORDER BY id DESC\n        LIMIT %s",
         )
 
-    # async def test_builder_build_update_with_relations(self):
-    #     query = await Message.build_update_with_relations()
-    #     self.assertEqual(
-    #         query[0],
-    #         "SELECT COUNT(*) FROM message",
-    #     )
+    async def test_builder_build_update_with_relations(self):
+        msg = Message(id=5, language="ru")
+        msg_attr = MessageAttribute(id=5, show_in_account=True)
+        msg.message_attributes_id = msg_attr
+        query = await msg.build_update_with_relations()
+        self.assertEqual(
+            query[0][0],
+            """
+            UPDATE message
+            SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s
+            WHERE id = %s
+        """,
+        )
+        self.assertEqual(
+            query[1][0],
+            """
+            UPDATE message_attributes
+            SET show_in_account=%s
+            WHERE message_id = %s
+        """,
+        )
 
-    # async def test_builder_build_create_with_relations(self):
-    #     query = await Message.build_create_with_relations()
-    #     self.assertEqual(
-    #         query[0],
-    #         "SELECT COUNT(*) FROM message",
-    #     )
+    async def test_builder_build_create_with_relations(self):
+        msg = Message(id=5, language="ru")
+        msg_attr = MessageAttribute(id=5, show_in_account=True)
+        msg.message_attributes_id = msg_attr
+        query = await Message.build_create_with_relations(msg)
+        self.assertEqual(
+            query[0][0],
+            """
+            INSERT INTO message (subject, publish, language, body_json, body, body_telegram_json, body_telegram)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """,
+        )
+        self.assertEqual(
+            query[1][0],
+            """
+            INSERT INTO message_attributes (message_id, show_in_account)
+            VALUES (%s, %s)
+        """,
+        )
