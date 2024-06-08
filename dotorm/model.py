@@ -117,19 +117,17 @@ class Model(metaclass=ModelMetaclass):
         }
 
     @classmethod
-    def get_store_fields(cls):
+    def get_store_fields(cls) -> list[str]:
         """Возвращает только те поля, которые хранятся в БД.
         Поля, у которых store = False, не хранятся в бд.
         По умолчанию все поля store = True.
         """
-        return ",".join(
-            [
-                name
-                for name, field in cls.get_fields().items()
-                if (isinstance(field, Field) and field.store and not field.relation)
-                or (not isinstance(field, Field) and not name.startswith("_"))
-            ]
-        )
+        return [
+            name
+            for name, field in cls.get_fields().items()
+            if (isinstance(field, Field) and field.store and not field.relation)
+            or (not isinstance(field, Field) and not name.startswith("_"))
+        ]
 
     @classmethod
     def get_store_fields_dict(cls):

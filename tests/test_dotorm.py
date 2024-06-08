@@ -177,7 +177,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
             query[0],
             """\n            select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram,clientid,show_in_account,send_email,send_telegram\n            from message\n            WHERE id = %s\n            ORDER BY id DESC\n        """,
         )
-        query = await Message.build_search(fields="id,date")
+        query = await Message.build_search(fields=["id", "date"])
         self.assertEqual(
             query[0],
             """\n            select id,date\n            from message\n            \n            ORDER BY id DESC\n        """,

@@ -1,11 +1,17 @@
 import aiomysql
 
-from ..exceptions import MysqlConnectionExecuteException, MysqlQueryExecuteException
+from ..exceptions import (
+    MysqlConnectionExecuteException,
+    MysqlGetConnectionExecuteException,
+    MysqlQueryExecuteException,
+)
 from .mysql_pool import mysqlPoolObject
 
 
 class MysqlSessionWithTransactionSingleConnection:
-    "Выполнить из коннекшена который уже есть"
+    """тот класс работает в одном соединении не закрывая его.
+    Пока его не закроют явно. Используется при работе в транзакции.
+    Паттерн unit of work."""
 
     def __init__(
         self, connection: aiomysql.Connection, cursor: aiomysql.Cursor
@@ -19,8 +25,6 @@ class MysqlSessionWithTransactionSingleConnection:
         val=None,
         func_prepare=None,
         func_cur="fetchall",
-        db=None,
-        autocommit=False,
     ):
         try:
             if val:
@@ -44,18 +48,10 @@ class MysqlSessionWithTransactionSingleConnection:
 
 
 class MysqlSessionWithPool:
-    "Выполнить из коннекшена который взят из пула"
+    "Этот класс берет соединение из пулла и выполняет запросв нем."
 
     @classmethod
-    async def execute(
-        cls,
-        stmt: str,
-        val=None,
-        func_prepare=None,
-        func_cur="fetchall",
-        db=None,
-        autocommit=None,
-    ):
+    async def execute(cls, stmt: str, val=None, func_prepare=None, func_cur="fetchall"):
         try:
             async with mysqlPoolObject.mysql_pool.acquire() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cur:
@@ -74,3 +70,62 @@ class MysqlSessionWithPool:
             raise MysqlConnectionExecuteException(stmt) from e
         except Exception as e:
             raise MysqlQueryExecuteException(stmt) from e
+
+
+class MysqlSession:
+    """Этот класс открывает одиночное соединение (не используя пулл)
+    и после выполнения сразу закрывает его."""
+
+    @classmethod
+    async def execute(
+        cls,
+        settings,
+        stmt: str,
+        val=None,
+        func_prepare=None,
+        func_cur="fetchall",
+        db=None,
+        autocommit=None,
+    ):
+        try:
+            conn: aiomysql.Connection = await cls.get_connection(
+                settings, db=db, autocommit=autocommit
+            )
+            cur: aiomysql.Cursor = await conn.cursor(aiomysql.DictCursor)
+            if val:
+                await cur.execute(stmt, val)
+            else:
+                await cur.execute(stmt)
+            if func_cur == "lastrowid":
+                rows = cur.lastrowid
+            else:
+                rows = await getattr(cur, func_cur)()
+            # await cur.commit()
+            await cur.close()
+            conn.close()
+            if func_prepare:
+                return func_prepare(rows)
+            return rows
+        except (ConnectionError, TimeoutError) as e:
+            raise MysqlConnectionExecuteException(stmt) from e
+        except Exception as e:
+            raise MysqlQueryExecuteException(stmt) from e
+
+    @classmethod
+    async def get_connection(cls, settings, db=None, autocommit=None):
+        try:
+            conn = await aiomysql.connect(
+                host=settings.db_portal_host if not db else settings.db_cl_host,
+                port=settings.db_portal_port if not db else settings.db_cl_port,
+                user=settings.db_portal_user if not db else settings.db_cl_user,
+                password=(
+                    settings.db_portal_password if not db else settings.db_cl_password
+                ),
+                db=settings.db_portal_database if not db else settings.db_cl_database,
+                autocommit=True if not db else False,
+                # autocommit=autocommit,
+            )
+
+            return conn
+        except Exception as e:
+            raise MysqlGetConnectionExecuteException("Get connection") from e

@@ -136,7 +136,7 @@ class Builder(Model):
     @classmethod
     async def build_get(cls, id, fields=[]):
         if not fields:
-            fields = cls.get_store_fields()
+            fields = ",".join(cls.get_store_fields())
         else:
             fields = ",".join(fields)
         stmt = f"""
@@ -194,14 +194,14 @@ class Builder(Model):
         limit=None,
         order="DESC",
         sort="id",
-        filter:Any=None,
+        filter: Any = None,
         fields=[],
         raw=None,
     ):
         if not fields:
-            fields = cls.get_store_fields()
+            fields = ",".join(cls.get_store_fields())
         else:
-            fields = fields
+            fields = ",".join(fields)
         where = ""
         where_values = ()
         if filter:
