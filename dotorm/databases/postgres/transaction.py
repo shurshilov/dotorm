@@ -10,7 +10,7 @@ class UnitOfWorkDotORMSingle:
         self.session_factory = PostgresSessionWithTransactionSingleConnection
 
     async def __aenter__(self):
-        connection: asyncpg.Connection = await pg_pool.pool_no_auto_commit.acquire()
+        connection: asyncpg.Connection = await pg_pool.pool_auto_commit.acquire()
         transaction = connection.transaction()
 
         assert isinstance(transaction, Transaction)
@@ -29,4 +29,4 @@ class UnitOfWorkDotORMSingle:
             # Не выпало исключение вызвать комит
             await self.session.transaction.commit()
         # В любом случае вернуть соединение в пул
-        await pg_pool.pool_no_auto_commit.release(self.session.connection)
+        await pg_pool.pool_auto_commit.release(self.session.connection)

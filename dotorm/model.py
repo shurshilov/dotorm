@@ -1,5 +1,5 @@
 from abc import ABCMeta
-from typing import Any, ClassVar, dataclass_transform
+from typing import Any, ClassVar, Type, dataclass_transform
 
 from .fields import Field, Many2one
 
@@ -11,6 +11,8 @@ class ModelMetaclass(ABCMeta): ...
 class Model(metaclass=ModelMetaclass):
     __table__: ClassVar[str]
     __route__: ClassVar[str]
+    __schema__: ClassVar[Type]
+
     id: ClassVar[int]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

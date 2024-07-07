@@ -1,20 +1,11 @@
 import logging
-from typing import TypedDict
-
-
-log = logging.getLogger("dotorm")
 import asyncio
+import asyncpg
 import time
 
-import asyncpg
+from backend.dotorm.dotorm.databases.types import PoolSettings
 
-
-class PoolSettings(TypedDict):
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+log = logging.getLogger("dotorm")
 
 
 class Pool:
@@ -38,7 +29,7 @@ class Pool:
                 # pool_recycle=60 * 15,
             )
             assert pool is not None
-            self.pool_no_auto_commit = pool
+            self.pool_auto_commit = pool
             start_time: float = time.time()
 
             log.debug(

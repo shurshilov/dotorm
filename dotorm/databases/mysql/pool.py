@@ -1,10 +1,11 @@
-import logging
-
-log = logging.getLogger("dotorm")
+import aiomysql
 import asyncio
+import logging
 import time
 
-import aiomysql
+from backend.dotorm.dotorm.databases.types import PoolSettings
+
+log = logging.getLogger("dotorm")
 
 
 class MysqlPool:
@@ -13,35 +14,23 @@ class MysqlPool:
             cls.instance = super().__new__(cls)
         return cls.instance
 
-    # def __init__(self):
-    #     self.mysql_pool_no_auto_commit: aiomysql.Pool
-    #     self.mysql_pool: aiomysql.Pool
-
     # РАБОТА С ПУЛОМ
-    async def mysql_connect(self, settings):
+    async def mysql_connect(self, settings: PoolSettings):
         try:
             start_time: float = time.time()
             self.mysql_pool_no_auto_commit: aiomysql.Pool = await aiomysql.create_pool(
+                **settings,
                 minsize=5,
-                maxsize=15,
-                host=settings.db_portal_host,
-                port=settings.db_portal_port,
-                user=settings.db_portal_user,
-                password=settings.db_portal_password,
-                db=settings.db_portal_database,
+                # maxsize=15,
                 autocommit=False,
                 # 15 minutes
                 pool_recycle=60 * 15,
             )
             start_time: float = time.time()
             self.mysql_pool: aiomysql.Pool = await aiomysql.create_pool(
-                minsize=6,
-                maxsize=15,
-                host=settings.db_portal_host,
-                port=settings.db_portal_port,
-                user=settings.db_portal_user,
-                password=settings.db_portal_password,
-                db=settings.db_portal_database,
+                **settings,
+                minsize=5,
+                # maxsize=15,
                 autocommit=True,
                 # 15 minutes
                 pool_recycle=60 * 15,
@@ -49,7 +38,7 @@ class MysqlPool:
 
             log.debug(
                 "Connection MySQL db: %s, created time: [%0.3fs]",
-                settings.db_portal_database,
+                settings["database"],
                 time.time() - start_time,
             )
             return self
@@ -66,4 +55,4 @@ class MysqlPool:
             raise e
 
 
-mysqlPoolObject = MysqlPool()
+mysql_pool = MysqlPool()
