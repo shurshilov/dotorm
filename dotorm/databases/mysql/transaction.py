@@ -1,7 +1,7 @@
 import aiomysql
 
-from .mysql_pool import mysqlPoolObject
-from .mysql_session import MysqlSessionWithTransactionSingleConnection
+from .pool import mysqlPoolObject
+from .session import MysqlSessionWithTransactionSingleConnection
 
 
 class UnitOfWorkDotORMSingle:

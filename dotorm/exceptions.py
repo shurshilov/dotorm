@@ -1,6 +1,10 @@
 """ Exceptions related to api"""
 
 
+class OrmConfigurationFieldException(Exception):
+    """Exception that raised when called api"""
+
+
 class OrmUpdateEmptyParamsException(Exception):
     """Exception that raised when called api"""
 
@@ -11,10 +15,6 @@ class OrmExecutorException(Exception):
 
 class OrmExecutorFirstTaskException(Exception):
     """Exception that raised when called api"""
-
-
-class MysqlGetSessionExecuteException(Exception):
-    """Exception that raised when mysql query error"""
 
 
 class MysqlGetConnectionExecuteException(Exception):
@@ -37,5 +37,21 @@ class MysqlConnectionExecuteException(Exception):
         self.cmd = cmd
 
 
-class MysqlConnectionPoolException(Exception):
-    """Exception that raised when mysql create pool error"""
+class PostgresGetConnectionExecuteException(Exception):
+    """Exception that raised when Postgres query error"""
+
+
+class PostgresQueryExecuteException(Exception):
+    """Exception that raised when Postgres query error"""
+
+    def __init__(self, cmd: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cmd = cmd
+
+
+class PostgresConnectionExecuteException(Exception):
+    """Exception that raised when Postgres connection query error"""
+
+    def __init__(self, cmd: str, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.cmd = cmd

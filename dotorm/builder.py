@@ -84,12 +84,14 @@ class Builder(Model):
             values_list -- значения для биндинга
         """
         if fields:
-            payload_no_relation = payload.to_dict(
-                include=fields, exclude_none=True, exclude=exclude
+            payload_no_relation = payload.json(
+                include=fields, exclude_none=True, exclude=exclude, only_store=True
             )
         else:
-            payload_no_relation = payload.to_dict(
-                exclude=cls.get_update_fields_set().union(exclude), exclude_none=True
+            payload_no_relation = payload.json(
+                exclude=cls.get_none_update_fields_set().union(exclude),
+                exclude_none=True,
+                only_store=True,
             )
         fields_list, values_list = zip(*payload_no_relation.items())
         if id:
@@ -115,10 +117,14 @@ class Builder(Model):
             values_list -- значения для биндинга
         """
         if fields:
-            payload_no_relation = payload.to_dict(include=fields, exclude_none=True)
+            payload_no_relation = payload.json(
+                include=fields, exclude_none=True, only_store=True
+            )
         else:
-            payload_no_relation = payload.to_dict(
-                exclude=cls.get_update_fields_set(), exclude_none=True
+            payload_no_relation = payload.json(
+                exclude=cls.get_none_update_fields_set(),
+                exclude_none=True,
+                only_store=True,
             )
 
         fields_list, values_list = zip(*payload_no_relation.items())

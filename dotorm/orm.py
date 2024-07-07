@@ -1,8 +1,10 @@
 import asyncio
 from typing import Self
 
+from dotorm.fields import Field
+
 from .builder import Builder
-from .databases.mysql_session import MysqlSessionWithPool
+from .databases.mysql.session import MysqlSessionWithPool
 
 # from model import Model
 
@@ -231,3 +233,42 @@ class DotModel(Builder):
     #     else:
     #         res = await cls.session_factory.execute(stmt, values, func_prepare, func_cur)
     #     return res
+
+    @classmethod
+    def __createTable__(cls):
+        # Метод для создания таблицы в базе данных, основанной на атрибутах класса.
+
+        # Создаём список custom_fields для хранения определений полей таблицы.
+        fields_created = []
+
+        # Проходимся по атрибутам класса и извлекаем информацию о полях.
+        for field_name, field in cls.get_fields().items():
+            if isinstance(field, Field) and field.store and not field.relation:
+                # Создаём строку с определением поля и добавляем её в список custom_fields.
+                field_declaration = [f'"{field_name}" {field.sql_type}']
+
+                if field.unique:
+                    field_declaration.append("UNIQUE")
+                if not field.null:
+                    field_declaration.append("NOT NULL")
+                if not field.primary_key:
+                    field_declaration.append("PRIMARY KEY")
+                if field.default is not None:
+                    field_declaration.append(f"DEFAULT {field.default}")
+
+                fields_created.append(" ".join(field_declaration))
+
+        # Создаём SQL-запрос для создания таблицы с определёнными полями.
+        create_table_sql = f"""
+        CREATE TABLE IF NOT EXISTS {cls.__table__} (
+            {", ".join(fields_created)}
+        );
+        """
+
+        # Выполняем SQL-запрос.
+        # await cls.session_factory.execute(create_table_sql)
+        # cursor.execute(create_table_sql)
+
+        # Фиксируем изменения и закрываем соединение с базой данных.
+        # conn.commit()
+        # conn.close()

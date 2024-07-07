@@ -88,9 +88,11 @@ async def main():
     print(Message.get_store_fields())
     print(Message.get_store_fields_dict())
     print("NONE UPDATE")
-    print(Message.get_update_fields_set())
+    print(Message.get_none_update_fields_set())
     print("TO DICT")
-    print(msg.to_dict())
+    print(msg.json(only_store=True))
+    print("GET FIELDS")
+    print(len(msg.get_fields()))
 
     query = await Message.build_get(5)
     print(query)

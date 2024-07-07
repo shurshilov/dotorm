@@ -80,35 +80,35 @@ class Message(DotModel):
     )
 
 
-# async def main():
-#     msg = Message(id=5, language="ru")
-
-#     query = await msg.build_delete()
-#     print(query)
-#     query = await Message.build_create(msg)
-#     print(query)
-#     query = await msg.build_update(msg)
-#     print(query)
-
-
 class TestBuilder(unittest.IsolatedAsyncioTestCase):
+    def test_all_fields(self):
+        fields_all = Message.get_fields()
+        print(fields_all)
+        self.assertEqual(len(fields_all), 17)
+
     def test_relation_fields(self):
         fields_relation = Message.get_relation_fields()
         print(fields_relation)
         self.assertEqual(len(fields_relation), 2)
 
-    def test_store_fields(self):
-        store_fields = Message.get_store_fields_dict()
-        print(store_fields)
-        print(Message.get_store_fields())
-        self.assertEqual(len(store_fields), 15)
-
     def test_none_update_fields(self):
-        none_update_fields = Message.get_update_fields_set()
+        none_update_fields = Message.get_none_update_fields_set()
         print(none_update_fields)
         self.assertEqual(len(none_update_fields), 3)
 
-    def test_to_dict(self):
+    def test_store_fields(self):
+        store_fields = Message.get_store_fields()
+        print(store_fields)
+        self.assertEqual(len(store_fields), 15)
+        self.assertEqual(type(store_fields), list)
+
+    def test_store_fields_dict(self):
+        store_fields = Message.get_store_fields_dict()
+        print(store_fields)
+        self.assertEqual(len(store_fields), 15)
+        self.assertEqual(type(store_fields), dict)
+
+    def test_get_store_fields_json(self):
         msg = Message(id=5, language="ru")
         origin_dict = {
             "date": None,
@@ -127,7 +127,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
             "send_email": None,
             "send_telegram": None,
         }
-        res_dict = msg.to_dict()
+        res_dict = msg.json(only_store=True)
         print(res_dict)
         self.assertEqual(res_dict, origin_dict)
 
