@@ -1,6 +1,9 @@
 from abc import ABCMeta
 from typing import Any, ClassVar, Type, dataclass_transform
 
+from .databases.mysql.transaction import TransactionMysqlDotORM
+from .databases.postgres.transaction import TransactionPostgresDotORM
+
 from .fields import Field, Many2one
 
 
@@ -12,6 +15,11 @@ class Model(metaclass=ModelMetaclass):
     __table__: ClassVar[str]
     __route__: ClassVar[str]
     __schema__: ClassVar[Type]
+    # __schema_output_read__: ClassVar[Type]
+    # __schema_input_create__: ClassVar[Type]
+    # __schema_input_update__: ClassVar[Type]
+
+    _transaction: Type[TransactionPostgresDotORM | TransactionMysqlDotORM]
 
     id: ClassVar[int]
 

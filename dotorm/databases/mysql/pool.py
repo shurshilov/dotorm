@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 
-from backend.dotorm.dotorm.databases.types import PoolSettings
+from ..types import PoolSettings
 
 log = logging.getLogger("dotorm")
 

@@ -5,7 +5,7 @@ from typing import Any, Type, TypeVar
 
 
 log = logging.getLogger("dotorm")
-from dotorm.exceptions import OrmConfigurationFieldException
+from .exceptions import OrmConfigurationFieldException
 
 T = TypeVar("T")
 

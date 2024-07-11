@@ -1,16 +1,16 @@
 import aiomysql
 
-from .pool import mysqlPoolObject
+from .pool import mysql_pool
 from .session import MysqlSessionWithTransactionSingleConnection
 
 
-class UnitOfWorkDotORMSingle:
+class TransactionMysqlDotORM:
     def __init__(self):
         self.session_factory = MysqlSessionWithTransactionSingleConnection
 
     async def __aenter__(self):
         connection: aiomysql.Connection = (
-            await mysqlPoolObject.mysql_pool_no_auto_commit._acquire()
+            await mysql_pool.mysql_pool_no_auto_commit._acquire()
         )
         cursor: aiomysql.Cursor = await connection.cursor(aiomysql.DictCursor)
         self.session = self.session_factory(connection, cursor)
@@ -27,4 +27,4 @@ class UnitOfWorkDotORMSingle:
         await self.session.cursor.close()
         # self.session.conn.close()
         # В любом случае закрыть соединение и курсор
-        await mysqlPoolObject.mysql_pool_no_auto_commit.release(self.session.connection)
+        await mysql_pool.mysql_pool_no_auto_commit.release(self.session.connection)

@@ -1,21 +1,8 @@
-import datetime
 from typing import Any, Self
 
 from .exceptions import OrmUpdateEmptyParamsException
 from .fields import Field, Many2many, Many2one, One2many, One2one
 from .model import Model
-
-# T = TypeVar("T", bound=Model)
-
-
-# class class_or_instancemethod(classmethod):
-#     """Этот класс нужен для определения метод вызван в контексте класса или инстанса
-#     другими словами @classmethod или @instancemethod
-#     """
-
-#     def __get__(self, instance, type_):
-#         descr_get = super().__get__ if instance is None else self.__func__.__get__
-#         return descr_get(instance, type_)
 
 
 class Builder(Model):
@@ -33,40 +20,6 @@ class Builder(Model):
     5. Из-за пункта 1 было принято решенние временно реализовать собственный класс, и в дальнейшем
     при появлении стабильных версий асинхронных orm использовать их.
     """
-
-    _CACHE_DATA: dict = {}
-    _CACHE_LAST_TIME: dict = {}
-
-    @staticmethod
-    def cache(name, ttl=30):
-        """Реализация простого кеша на TTL секунд, таблиц которые редко меняются,
-        и делать запрос в БД не целесообразно каждый раз, можно сохранить результат.
-        При использовании более одного воркера необходимо использовать redis.
-
-        Arguments:
-            name -- name cache store data
-            ttl -- seconds cache store
-        """
-
-        def decorator(func):
-            async def wrapper(self, *args):
-                # если данные есть в кеше
-                if self._CACHE_DATA.get(name):
-                    time_diff = datetime.datetime.now() - self._CACHE_LAST_TIME[name]
-                    # проверить актуальные ли они
-                    if time_diff.seconds < ttl:
-                        # если актуальные вернуть их
-                        return self._CACHE_DATA[name]
-
-                # если данных нет или они не актуальные сделать запрос в БД и запомнить
-                self._CACHE_DATA[name] = await func(self, *args)
-                # также сохранить дату и время запроса, для последующей проверки
-                self._CACHE_LAST_TIME[name] = datetime.datetime.now()
-                return self._CACHE_DATA[name]
-
-            return wrapper
-
-        return decorator
 
     @classmethod
     def build_sql_update_from_schema(
@@ -145,52 +98,36 @@ class Builder(Model):
             fields = ",".join(cls.get_store_fields())
         else:
             fields = ",".join(fields)
-        stmt = f"""
-            SELECT {fields}
-            FROM {cls.__table__}
-            WHERE id = %s
-            LIMIT 1
-        """.replace(
-            "\n", ""
-        )
-
-        return stmt, [id], cls.prepare_id, "fetchall"
+        stmt = f"""\
+SELECT {fields} \
+FROM {cls.__table__} \
+WHERE id = %s \
+LIMIT 1"""
+        return stmt, [id]
 
     async def build_delete(self):
         stmt = f"DELETE FROM {self.__table__} WHERE id=%s"
-
-        return stmt, self.id, None, "fetchall"
+        return stmt, [self.id]
 
     @classmethod
     async def build_create(cls, payload):
-        stmt = f"""
-            INSERT INTO {cls.__table__} (%s)
-            VALUES (%s);
-        """
+        stmt = f"""\
+INSERT INTO {cls.__table__} (%s) \
+VALUES (%s)"""
         # TODO: создание relations полей
         stmt, values_list = cls.build_sql_create_from_schema(stmt, payload)
-        return stmt, values_list, None, "lastrowid"
+        return stmt, values_list
 
     async def build_update(self, payload: Self, fields=[]):
-        # self_or_cls: Self
-        # если вызов из инстанса, ане из класса
-        # if not isinstance(self_or_cls, type):
-        #     id = self_or_cls.id
-        #     payload = self_or_cls
-
-        # if not payload:
-        #     raise OrmUpdateEmptyParamsException
-
-        stmt = f"""
-            UPDATE {self.__table__}
-            SET %s
-            WHERE id = %s
-        """
+        stmt = f"""\
+UPDATE {self.__table__} \
+SET %s \
+WHERE id = %s"""
         # Создание сущности в базе без связей
         stmt, values_list = self.build_sql_update_from_schema(
             stmt, payload, self.id, fields
         )
-        return stmt, values_list, None, "fetchall"
+        return stmt, values_list
 
     @classmethod
     async def build_search(
@@ -238,12 +175,11 @@ class Builder(Model):
                         where_values += (str(value),)
             where = "WHERE " + " and ".join(where_condition)
 
-        cmd = f"""
-            select {fields}
-            from {cls.__table__}
-            {where}
-            ORDER BY {sort} {order}
-        """
+        cmd = f"""\
+select {fields} \
+from {cls.__table__} \
+{where} \
+ORDER BY {sort} {order} """
         if end != None and start != None:
             cmd += "LIMIT %s, %s"
             val = (start, end - start)
@@ -255,41 +191,40 @@ class Builder(Model):
 
         if where_values:
             val = where_values + val
-        return cmd, val, cls.prepare_ids if not raw else None, "fetchall"
+        return cmd, val
 
     @classmethod
     async def build_table_len(cls):
         cmd = f"SELECT COUNT(*) FROM {cls.__table__}"
-        return cmd, None, lambda rows: [r["COUNT(*)"] for r in rows], "fetchall"
+        # return cmd, None, lambda rows: [r["COUNT(*)"] for r in rows], "fetchall"
+        return cmd, None  # , lambda rows: [r["count"] for r in rows], "fetchall"
 
     async def build_update_one2one(self, fk_id: int, fields=[], fk="id"):
         if not fk_id:
             raise OrmUpdateEmptyParamsException
 
-        stmt = f"""
-            UPDATE {self.__table__}
-            SET %s
-            WHERE {fk} = %s
-        """
+        stmt = f"""\
+UPDATE {self.__table__} \
+SET %s \
+WHERE {fk} = %s"""
 
         stmt, values_list = self.build_sql_update_from_schema(
             stmt, self, fk_id, fields, exclude={fk}
         )
-        return stmt, values_list, None, "fetchall"
+        return stmt, values_list
 
     async def build_create_one2one(self, fk_id=id, fk="id"):
         if not fk_id:
             raise OrmUpdateEmptyParamsException
 
-        stmt = f"""
-            INSERT INTO {self.__table__} (%s)
-            VALUES (%s)
-        """
+        stmt = f"""\
+INSERT INTO {self.__table__} (%s) \
+VALUES (%s)"""
         # TODO: создание relations полей
         setattr(self, fk, fk_id)
         # self[fk] = fk_id
         stmt, values_list = self.build_sql_create_from_schema(stmt, self)
-        return stmt, values_list, None, "lastrowid"
+        return stmt, values_list
 
     # TODO: universal
     @classmethod
@@ -318,7 +253,7 @@ class Builder(Model):
         GROUP BY p.id
         ORDER BY p.clientid DESC
         """
-        return cmd, (id,) + ("KDPadmin%%",), comodel.prepare_ids, "fetchall"
+        return cmd, [id, "KDPadmin%%"]  # , comodel.prepare_ids, "fetchall"
 
     @classmethod
     async def build_get_with_relations(
@@ -378,23 +313,11 @@ class Builder(Model):
                 request_list.append(await relation_table.build_get(id))
 
         return request_list, field_name_list
-        # results = await asyncio.gather(*request_list)
-        # # добавляем атрибуты к исходному обьекту,
-        # # получая удобное обращение через дот-нотацию
-        # record: self_or_cls = results.pop(0)
-        # for field in results:
-        #     setattr(record, field_name_list.pop(0), field)
-
-        # return record
 
     async def build_update_with_relations(self, payload=None, fields=[]):
         request_list = []
         if not payload:
             payload = self
-        # если вызов из инстанса, ане из класса
-        # if not isinstance(self_or_cls, type):
-        #     id = self_or_cls.id
-        #     payload = self_or_cls
         # Создание сущности в базе без связей
         request_list.append(await self.build_update(payload, fields))
 

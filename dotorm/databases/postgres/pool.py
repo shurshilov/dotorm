@@ -3,7 +3,7 @@ import asyncio
 import asyncpg
 import time
 
-from backend.dotorm.dotorm.databases.types import PoolSettings
+from ..types import PoolSettings
 
 log = logging.getLogger("dotorm")
 
@@ -28,6 +28,7 @@ class Pool:
                 # max_inactive_connection_lifetime
                 # pool_recycle=60 * 15,
             )
+            # assert isinstance(pool, asyncpg.Pool)
             assert pool is not None
             self.pool_auto_commit = pool
             start_time: float = time.time()

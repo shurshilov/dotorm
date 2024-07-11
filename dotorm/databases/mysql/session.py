@@ -1,16 +1,17 @@
 import aiomysql
 
-from dotorm.exceptions import (
+from ...exceptions import (
     MysqlConnectionExecuteException,
     MysqlGetConnectionExecuteException,
     MysqlQueryExecuteException,
 )
 
 
-from .pool import mysqlPoolObject
+from .pool import mysql_pool
+from ..sesson_abstract import SessionAbstract
 
 
-class MysqlSessionWithTransactionSingleConnection:
+class MysqlSessionWithTransactionSingleConnection(SessionAbstract):
     """тот класс работает в одном соединении не закрывая его.
     Пока его не закроют явно. Используется при работе в транзакции.
     Паттерн unit of work."""
@@ -26,15 +27,16 @@ class MysqlSessionWithTransactionSingleConnection:
         stmt: str,
         val=None,
         func_prepare=None,
-        func_cur="fetchall",
+        func_cur=None,
     ):
         try:
-            if val:
-                await self.cursor.execute(stmt, val)
-            else:
-                await self.cursor.execute(stmt)
+            if not func_cur:
+                if val:
+                    await self.cursor.execute(stmt, val)
+                else:
+                    await self.cursor.execute(stmt)
 
-            if func_cur == "lastrowid":
+            elif func_cur == "lastrowid":
                 rows = self.cursor.lastrowid
             else:
                 rows = await getattr(self.cursor, func_cur)()
@@ -49,13 +51,13 @@ class MysqlSessionWithTransactionSingleConnection:
             raise MysqlQueryExecuteException(stmt) from e
 
 
-class MysqlSessionWithPool:
+class MysqlSessionWithPool(SessionAbstract):
     "Этот класс берет соединение из пулла и выполняет запросв нем."
 
     @classmethod
     async def execute(cls, stmt: str, val=None, func_prepare=None, func_cur="fetchall"):
         try:
-            async with mysqlPoolObject.mysql_pool.acquire() as conn:
+            async with mysql_pool.mysql_pool.acquire() as conn:
                 async with conn.cursor(aiomysql.DictCursor) as cur:
                     if val:
                         await cur.execute(stmt, val)
@@ -74,7 +76,7 @@ class MysqlSessionWithPool:
             raise MysqlQueryExecuteException(stmt) from e
 
 
-class MysqlSession:
+class MysqlSession(SessionAbstract):
     """Этот класс открывает одиночное соединение (не используя пулл)
     и после выполнения сразу закрывает его."""
 
