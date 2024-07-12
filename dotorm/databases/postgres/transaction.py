@@ -20,7 +20,7 @@ class TransactionPostgresDotORM:
         await transaction.start()
         self.session = self.session_factory(connection, transaction)
 
-        return self
+        return self.session
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if exc_type is not None:

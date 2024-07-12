@@ -1,7 +1,7 @@
 from typing import TypedDict
 
 
-class PoolSettings(TypedDict):
+class PostgresPoolSettings(TypedDict):
     host: str
     port: int
     user: str

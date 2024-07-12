@@ -86,18 +86,18 @@ class DotModel(Builder):
         func_prepare = None
         func_cur = "lastrowid"
         # совместимость с postgres
-        if (
-            type(session)
-            == PostgresSessionWithTransactionSingleConnection | PostgresSessionWithPool
-        ):
+        if type(session) in [
+            PostgresSessionWithTransactionSingleConnection,
+            PostgresSessionWithPool,
+        ]:
             stmt += " RETURNING id"
 
         record = await session.execute(stmt, values, func_prepare, func_cur)
         assert record is not None
-        if (
-            type(session)
-            == PostgresSessionWithTransactionSingleConnection | PostgresSessionWithPool
-        ):
+        if type(session) in [
+            PostgresSessionWithTransactionSingleConnection,
+            PostgresSessionWithPool,
+        ]:
             return record[0]["id"]
         return record
 
@@ -130,10 +130,10 @@ class DotModel(Builder):
     async def table_len(cls, session):
         stmt, values = await cls.build_table_len()
         func_prepare = lambda rows: [r["COUNT(*)"] for r in rows]
-        if (
-            type(session)
-            == PostgresSessionWithTransactionSingleConnection | PostgresSessionWithPool
-        ):
+        if type(session) in [
+            PostgresSessionWithTransactionSingleConnection,
+            PostgresSessionWithPool,
+        ]:
             func_prepare = lambda rows: [r["count"] for r in rows]
         func_cur = "fetchall"
 

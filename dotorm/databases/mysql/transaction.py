@@ -14,7 +14,7 @@ class TransactionMysqlDotORM:
         self.session = MysqlSessionWithPoolTransaction(connection, cursor)
         # self._opened = True
 
-        return self
+        return self.session
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         # try:

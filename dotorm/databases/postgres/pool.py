@@ -3,7 +3,7 @@ import asyncio
 import asyncpg
 import time
 
-from ..types import PoolSettings
+from ..types import PostgresPoolSettings
 
 log = logging.getLogger("dotorm")
 
@@ -15,7 +15,7 @@ class Pool:
         return cls.instance
 
     # РАБОТА С ПУЛОМ
-    async def connect(self, settings: PoolSettings):
+    async def connect(self, settings: PostgresPoolSettings):
         try:
             start_time: float = time.time()
             pool = await asyncpg.create_pool(
@@ -38,7 +38,7 @@ class Pool:
                 settings["database"],
                 time.time() - start_time,
             )
-            return self
+            return self.pool_auto_commit
         except (
             ConnectionError,
             TimeoutError,
