@@ -1,9 +1,13 @@
 import asyncio
 import datetime
-from typing import Self
+from typing import ClassVar, Self
 
-from .databases.postgres.transaction import TransactionPostgresDotORM
-from .fields import Field
+from .databases.postgres.session import (
+    PostgresSessionWithPool,
+    PostgresSessionWithTransactionSingleConnection,
+)
+
+from .fields import Field, Many2many, Many2one, One2many, One2one
 from .builder import Builder
 
 
@@ -15,8 +19,8 @@ class DotModel(Builder):
     тоесть вставка происходит через N соединений и при этом может откатиться.
     """
 
-    _CACHE_DATA: dict = {}
-    _CACHE_LAST_TIME: dict = {}
+    _CACHE_DATA: ClassVar[dict] = {}
+    _CACHE_LAST_TIME: ClassVar[dict] = {}
 
     @staticmethod
     def cache(name, ttl=30):
@@ -49,53 +53,60 @@ class DotModel(Builder):
 
         return decorator
 
-    # CRUD
-    async def delete(self, id=None):
+    async def delete(self, session):
         stmt, values = await self.build_delete()
         func_prepare = None
         func_cur = "fetchall"
-        async with self._transaction() as tr:
-            return await tr.session.execute(stmt, values, func_prepare, func_cur)
 
-    async def update(self, payload: Self | None = None, fields=[]):
+        return await session.execute(stmt, values, func_prepare, func_cur)
+
+    async def update(self, session, payload: Self | None = None, fields=[]):
         if not payload:
             payload = self
         stmt, values = await self.build_update(payload, fields)
         func_prepare = None
         func_cur = "fetchall"
-        async with self._transaction() as tr:
-            return await tr.session.execute(stmt, values, func_prepare, func_cur)
+
+        return await session.execute(stmt, values, func_prepare, func_cur)
 
     @classmethod
-    async def get(cls, id, fields=[]):
+    async def get(cls, session, id, fields=[]):
         stmt, values = await cls.build_get(id, fields)
         func_prepare = cls.prepare_id
         func_cur = "fetchall"
-        async with cls._transaction() as tr:
-            record = await tr.session.execute(stmt, values, func_prepare, func_cur)
-            assert record is not None
-            # record = records[0]
-            assert isinstance(record, cls)
-            return record
+
+        record = await session.execute(stmt, values, func_prepare, func_cur)
+        assert record is not None
+        assert isinstance(record, cls)
+        return record
 
     @classmethod
-    async def create(cls, payload):
+    async def create(cls, session, payload):
         stmt, values = await cls.build_create(payload)
         func_prepare = None
         func_cur = "lastrowid"
-        if cls._transaction == TransactionPostgresDotORM:
+        # совместимость с postgres
+        if (
+            type(session)
+            == PostgresSessionWithTransactionSingleConnection | PostgresSessionWithPool
+        ):
             stmt += " RETURNING id"
-        async with cls._transaction() as tr:
-            record = await tr.session.execute(stmt, values, func_prepare, func_cur)
-            assert record is not None
-            if cls._transaction == TransactionPostgresDotORM:
-                return record[0]["id"]
-            return record
+
+        record = await session.execute(stmt, values, func_prepare, func_cur)
+        assert record is not None
+        if (
+            type(session)
+            == PostgresSessionWithTransactionSingleConnection | PostgresSessionWithPool
+        ):
+            return record[0]["id"]
+        return record
+
         # TODO: создание relations полей
 
     @classmethod
     async def search(
         cls,
+        session,
         start=None,
         end=None,
         limit=None,
@@ -110,95 +121,173 @@ class DotModel(Builder):
         )
         func_prepare = cls.prepare_ids if not raw else None
         func_cur = "fetchall"
-        async with cls._transaction() as tr:
-            records = await tr.session.execute(stmt, values, func_prepare, func_cur)
-            assert records is not None
-            # if len(records) and not raw:
-            #     assert type(records) == list[Self]
-            #     return records
-            return records
+
+        records = await session.execute(stmt, values, func_prepare, func_cur)
+        assert records is not None
+        return records
 
     @classmethod
-    async def table_len(cls):
+    async def table_len(cls, session):
         stmt, values = await cls.build_table_len()
         func_prepare = lambda rows: [r["COUNT(*)"] for r in rows]
-        if cls._transaction == TransactionPostgresDotORM:
+        if (
+            type(session)
+            == PostgresSessionWithTransactionSingleConnection | PostgresSessionWithPool
+        ):
             func_prepare = lambda rows: [r["count"] for r in rows]
         func_cur = "fetchall"
-        async with cls._transaction() as tr:
-            records = await tr.session.execute(stmt, values, func_prepare, func_cur)
-            assert records is not None
-            if len(records):
-                return records
-            return []
+
+        records = await session.execute(stmt, values, func_prepare, func_cur)
+        assert records is not None
+        if len(records):
+            return records
+        return []
 
     # RELASHIONSHIP
     @classmethod
-    async def get_with_relations(cls, id, fields=[], relation_fields=[]):
-        request_list, field_name_list = await cls.build_get_with_relations(
+    async def get_with_relations_concurrent(
+        cls, session, id, fields=[], relation_fields=[]
+    ):
+        """Выполняется ПАРАЛЛЕЛЬНО в нескольких соединениях, без транзакций"""
+        request_list, field_name_list, field_list = await cls.build_get_with_relations(
             id, fields, relation_fields
         )
-        async with cls._transaction() as tr:
-            request_list = [
-                tr.session.execute(i[0], i[1], i[2], i[3]) for i in request_list
-            ]
+        # первый запрос всегда build_get
+        request_list[0] += (cls.prepare_id, "fetchall")
 
-            # если один из запросов с ошибкой сразу прекратить выполнение и выкинуть ошибку
-            results: list[cls] = await asyncio.gather(*request_list)
+        for index in range(1, len(request_list)):
+            field = field_list[index - 1]
+            if isinstance(field, Many2many):
+                request_list[index] += (field.relation_table.prepare_ids, "fetchall")
+            elif isinstance(field, One2many):
+                request_list[index] += (field.relation_table.prepare_ids, "fetchall")
+            elif isinstance(field, One2one):
+                request_list[index] += (field.relation_table.prepare_id, "fetchall")
+            elif isinstance(field, Many2one):
+                request_list[index] += (field.relation_table.prepare_id, "fetchall")
 
-            # добавляем атрибуты к исходному обьекту,
-            # получая удобное обращение через дот-нотацию
-            record = results.pop(0)
-            for field in results:
-                setattr(record, field_name_list.pop(0), field)
+        # TODO: придумать механизм сборки нескольких запросов с func_prepare
+        request_list = [
+            session.execute(stmt=i[0], val=i[1], func_prepare=i[2], func_cur=i[3])
+            for i in request_list
+        ]
 
-            return record
+        # если один из запросов с ошибкой сразу прекратить выполнение и выкинуть ошибку
+        results: list[cls] = await asyncio.gather(*request_list)
 
-    async def update_with_relations(self, payload: Self, fields=[]):
-        request_list = await self.build_update_with_relations(payload, fields)
-        async with self._transaction() as tr:
-            request_list = [
-                tr.session.execute(i[0], i[1], i[2], i[3]) for i in request_list
-            ]
-            # 1 conn
-            results = tuple()
-            for request in request_list:
-                res = await request
-                results += tuple(res)
-            return results
+        # добавляем атрибуты к исходному обьекту,
+        # получая удобное обращение через дот-нотацию
+        record = results.pop(0)
+        for field in results:
+            setattr(record, field_name_list.pop(0), field)
 
-    async def update_one2one(self, fk_id, fields=[], fk="id"):
+        return record
+
+    @classmethod
+    async def get_with_relations(cls, session, id, fields=[], relation_fields=[]):
+        """Выполняется ПОСЛЕДОВАТЕЛЬНО в нескольких соединениях, без транзакций"""
+        request_list, field_name_list, field_list = await cls.build_get_with_relations(
+            id, fields, relation_fields
+        )
+        # первый запрос всегда build_get
+        request_list[0] += (cls.prepare_id, "fetchall")
+
+        for index in range(1, len(request_list)):
+            field = field_list[index - 1]
+            if isinstance(field, Many2many):
+                request_list[index] += (field.relation_table.prepare_ids, "fetchall")
+            elif isinstance(field, One2many):
+                request_list[index] += (field.relation_table.prepare_ids, "fetchall")
+            elif isinstance(field, One2one):
+                request_list[index] += (field.relation_table.prepare_id, "fetchall")
+            elif isinstance(field, Many2one):
+                request_list[index] += (field.relation_table.prepare_id, "fetchall")
+
+        results = []
+        # 1 conn
+        for request in request_list:
+            res = await session.execute(
+                stmt=request[0],
+                val=request[1],
+                func_prepare=request[2],
+                func_cur=request[3],
+            )
+            results.append(res)
+
+        # добавляем атрибуты к исходному обьекту,
+        # получая удобное обращение через дот-нотацию
+        record = results.pop(0)
+        for field in results:
+            setattr(record, field_name_list.pop(0), field)
+
+        return record
+
+    async def update_with_relations(self, session, payload: Self, fields=[]):
+        """Выполняется ПОСЛЕДОВАТЕЛЬНО в одном соединении"""
+        request_list, field_list = await self.build_update_with_relations(
+            payload, fields
+        )
+
+        # первый запрос всегда build_update
+        request_list[0] += (None, "fetchall")
+
+        for index in range(1, len(request_list)):
+            field = field_list[index - 1]
+            if isinstance(field, Many2many):
+                request_list[index] += (None, "fetchall")
+            elif isinstance(field, One2many):
+                request_list[index] += (None, "fetchall")
+            elif isinstance(field, One2one):
+                request_list[index] += (None, "fetchall")
+            elif isinstance(field, Many2one):
+                request_list[index] += (None, "fetchall")
+
+        # 1 conn
+        results = tuple()
+        for request in request_list:
+            res = await session.execute(
+                stmt=request[0],
+                val=request[1],
+                func_prepare=None,
+                func_cur="fetchall",
+            )
+            results += tuple(res)
+        return results
+
+    async def update_one2one(self, session, fk_id, fields=[], fk="id"):
         stmt, values = await self.build_update_one2one(fk_id, fields, fk)
         func_prepare = None
         func_cur = "fetchall"
-        async with self._transaction() as tr:
-            res = await tr.session.execute(stmt, values, func_prepare, func_cur)
+
+        res = await session.execute(stmt, values, func_prepare, func_cur)
         return res
 
     # TODO: universal
     @classmethod
-    async def get_many2many(cls, id, comodel, relation, column1, column2, fields=[]):
+    async def get_many2many(
+        cls, session, id, comodel, relation, column1, column2, fields=[]
+    ):
         stmt, values = await cls.build_get_many2many(
             id, comodel, relation, column1, column2, fields
         )
         func_prepare = comodel.prepare_ids
         func_cur = "fetchall"
-        async with cls._transaction() as tr:
-            res = await tr.session.execute(stmt, values, func_prepare, func_cur)
+
+        res = await session.execute(stmt, values, func_prepare, func_cur)
         return res
 
     @classmethod
-    async def create_with_relations(cls, payload=None):
+    async def create_with_relations(cls, session, payload=None):
         request_list = await cls.build_create_with_relations(payload)
-        async with cls._transaction() as tr:
-            request_list = [
-                tr.session.execute(i[0], i[1], i[2], i[3]) for i in request_list
-            ]
-            # 1 conn
-            results = tuple()
-            for request in request_list:
-                results += tuple(await request)
-            return results
+        request_list = [
+            session.execute(stmt=i[0], val=i[1], func_prepare=None, func_cur="fetchall")
+            for i in request_list
+        ]
+        # 1 conn
+        results = tuple()
+        for request in request_list:
+            results += tuple(await request)
+        return results
 
     # async def create_one2one(cls, fk_id=None, fk="id", session=None):
     #     stmt, values, func_prepare, func_cur = await cls.build_create_one2one(fk_id, fk)
@@ -209,7 +298,7 @@ class DotModel(Builder):
     #     return res
 
     @classmethod
-    async def __create_table__(cls):
+    async def __create_table__(cls, session):
         # Метод для создания таблицы в базе данных, основанной на атрибутах класса.
 
         # Создаём список custom_fields для хранения определений полей таблицы.
@@ -239,6 +328,5 @@ CREATE TABLE IF NOT EXISTS {cls.__table__} (\
 );"""
 
         # Выполняем SQL-запрос.
-        async with cls._transaction() as tr:
-            res = await tr.session.execute(create_table_sql)
+        res = await session.execute(create_table_sql)
         return res

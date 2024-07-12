@@ -1,20 +1,16 @@
 import asyncpg
 from asyncpg.transaction import Transaction
 
-from .pool import pg_pool
 from .session import PostgresSessionWithTransactionSingleConnection
 
 
 class TransactionPostgresDotORM:
-    def __init__(self, connection=None):
+    def __init__(self, pool: asyncpg.Pool):
         self.session_factory = PostgresSessionWithTransactionSingleConnection
-        self.connection = connection
+        self.pool = pool
 
     async def __aenter__(self):
-        if self.connection:
-            connection = self.connection
-        else:
-            connection: asyncpg.Connection = await pg_pool.pool_auto_commit.acquire()
+        connection: asyncpg.Connection = await self.pool.acquire()
 
         transaction = connection.transaction()
 
@@ -33,8 +29,5 @@ class TransactionPostgresDotORM:
         else:
             # Не выпало исключение вызвать комит
             await self.session.transaction.commit()
-        if self.connection:
-            await self.connection.close()
-        else:
-            # В любом случае вернуть соединение в пул
-            await pg_pool.pool_auto_commit.release(self.session.connection)
+        # В любом случае вернуть соединение в пул
+        await self.pool.release(self.session.connection)

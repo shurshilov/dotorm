@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 
-from ..types import PoolSettings
+from ..types import MysqlPoolSettings
 
 log = logging.getLogger("dotorm")
 
@@ -15,19 +15,10 @@ class MysqlPool:
         return cls.instance
 
     # РАБОТА С ПУЛОМ
-    async def mysql_connect(self, settings: PoolSettings):
+    async def mysql_connect(self, settings: MysqlPoolSettings):
         try:
             start_time: float = time.time()
-            self.mysql_pool_no_auto_commit: aiomysql.Pool = await aiomysql.create_pool(
-                **settings,
-                minsize=5,
-                # maxsize=15,
-                autocommit=False,
-                # 15 minutes
-                pool_recycle=60 * 15,
-            )
-            start_time: float = time.time()
-            self.mysql_pool: aiomysql.Pool = await aiomysql.create_pool(
+            self.pool: aiomysql.Pool = await aiomysql.create_pool(
                 **settings,
                 minsize=5,
                 # maxsize=15,
@@ -35,13 +26,13 @@ class MysqlPool:
                 # 15 minutes
                 pool_recycle=60 * 15,
             )
-
+            start_time: float = time.time()
             log.debug(
                 "Connection MySQL db: %s, created time: [%0.3fs]",
-                settings["database"],
+                settings["db"],
                 time.time() - start_time,
             )
-            return self
+            return self.pool
         except (ConnectionError, TimeoutError, aiomysql.OperationalError) as e:
             # Если не смогли подключиться к базе пробуем переподключиться
             log.exception(

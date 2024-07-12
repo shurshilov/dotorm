@@ -258,9 +258,10 @@ VALUES (%s)"""
     @classmethod
     async def build_get_with_relations(
         cls, id, fields=[], relation_fields=[]
-    ) -> tuple[list, list]:
+    ) -> tuple[list, list, list]:
         request_list = []
         field_name_list = []
+        field_list = []
 
         request_list.append(await cls.build_get(id, fields))
 
@@ -279,13 +280,14 @@ VALUES (%s)"""
                 if not relation:
                     continue
                 # field_obj = getattr(payload, field_name)
-                relation_table = field.relation_table or None
-                relation_table_field = field.relation_table_field or False
+                relation_table = field.relation_table
+                relation_table_field = field.relation_table_field
             else:
                 continue
 
             if isinstance(field, Many2many):
                 field_name_list.append(name)
+                field_list.append(field)
                 request_list.append(
                     await cls.build_get_many2many(
                         id,
@@ -294,14 +296,16 @@ VALUES (%s)"""
                         field.column1 or False,
                         field.column2 or False,
                     )
-                ),
+                )
             elif isinstance(field, One2many):
                 field_name_list.append(name)
+                field_list.append(field)
                 request_list.append(
                     await relation_table.build_search(filter={relation_table_field: id})
                 )
             elif isinstance(field, One2one):
                 field_name_list.append(name)
+                field_list.append(field)
                 request_list.append(
                     await relation_table.build_search(
                         filter={relation_table_field: id},
@@ -310,12 +314,14 @@ VALUES (%s)"""
                 )
             elif isinstance(field, Many2one):
                 field_name_list.append(name)
+                field_list.append(field)
                 request_list.append(await relation_table.build_get(id))
 
-        return request_list, field_name_list
+        return request_list, field_name_list, field_list
 
     async def build_update_with_relations(self, payload=None, fields=[]):
         request_list = []
+        field_list = []
         if not payload:
             payload = self
         # Создание сущности в базе без связей
@@ -346,6 +352,7 @@ VALUES (%s)"""
                 #     request_list.append(self_or_cls.execute_sql_fetchall(cmd, values_list))
             elif isinstance(field, One2many):
                 # обновление каждой записи в one2many
+                field_list.append(field)
                 for obj in field_obj:
                     request_list.append(
                         await obj.build_update_one2one(
@@ -353,12 +360,13 @@ VALUES (%s)"""
                         )
                     )
             elif isinstance(field, One2one):
+                field_list.append(field)
                 request_list.append(
                     await field_obj.build_update_one2one(
                         fk_id=payload.id, fk=relation_table_field
                     )
                 )
-        return request_list
+        return request_list, field_list
 
     @classmethod
     async def build_create_with_relations(cls, payload, id=None):

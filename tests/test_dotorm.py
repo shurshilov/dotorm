@@ -229,7 +229,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         msg = Message(id=5, language="ru")
         msg_attr = MessageAttribute(id=5, show_in_account=True)
         msg.message_attributes_id = msg_attr
-        query = await msg.build_update_with_relations()
+        query, field_list = await msg.build_update_with_relations()
         self.assertEqual(
             query[0][0],
             """\
