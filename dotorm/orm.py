@@ -92,6 +92,7 @@ class DotModel(Builder):
         ]:
             stmt += " RETURNING id"
 
+        # TODO: создание relations полей
         record = await session.execute(stmt, values, func_prepare, func_cur)
         assert record is not None
         if type(session) in [
@@ -100,8 +101,6 @@ class DotModel(Builder):
         ]:
             return record[0]["id"]
         return record
-
-        # TODO: создание relations полей
 
     @classmethod
     async def search(
@@ -254,6 +253,27 @@ class DotModel(Builder):
             results += tuple(res)
         return results
 
+    @classmethod
+    async def create_with_relations(cls, session, payload=None):
+        request_list = await cls.build_create_with_relations(payload)
+        request_list = [
+            session.execute(stmt=i[0], val=i[1], func_prepare=None, func_cur="fetchall")
+            for i in request_list
+        ]
+        # 1 conn
+        results = tuple()
+        for request in request_list:
+            results += tuple(await request)
+        return results
+
+    # async def create_one2one(cls, fk_id=None, fk="id", session=None):
+    #     stmt, values, func_prepare, func_cur = await cls.build_create_one2one(fk_id, fk)
+    #     if session:
+    #         res = await session.execute(stmt, values, func_prepare, func_cur)
+    #     else:
+    #         res = await cls._transaction.execute(stmt, values, func_prepare, func_cur)
+    #     return res
+
     async def update_one2one(self, session, fk_id, fields=[], fk="id"):
         stmt, values = await self.build_update_one2one(fk_id, fields, fk)
         func_prepare = None
@@ -275,27 +295,6 @@ class DotModel(Builder):
 
         res = await session.execute(stmt, values, func_prepare, func_cur)
         return res
-
-    @classmethod
-    async def create_with_relations(cls, session, payload=None):
-        request_list = await cls.build_create_with_relations(payload)
-        request_list = [
-            session.execute(stmt=i[0], val=i[1], func_prepare=None, func_cur="fetchall")
-            for i in request_list
-        ]
-        # 1 conn
-        results = tuple()
-        for request in request_list:
-            results += tuple(await request)
-        return results
-
-    # async def create_one2one(cls, fk_id=None, fk="id", session=None):
-    #     stmt, values, func_prepare, func_cur = await cls.build_create_one2one(fk_id, fk)
-    #     if session:
-    #         res = await session.execute(stmt, values, func_prepare, func_cur)
-    #     else:
-    #         res = await cls._transaction.execute(stmt, values, func_prepare, func_cur)
-    #     return res
 
     @classmethod
     async def __create_table__(cls, session):

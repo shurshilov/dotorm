@@ -1,8 +1,7 @@
 import asyncpg
 from asyncpg.transaction import Transaction
 
-from backend.dotorm.dotorm.databases.types import PostgresPoolSettings
-
+from ..types import PostgresPoolSettings
 from ..sesson_abstract import SessionAbstract
 
 
@@ -113,9 +112,7 @@ class PostgresSessionWithoutTransaction(SessionAbstract):
             await conn.execute(stmt, val)
         else:
             await conn.execute(stmt)
-        # if func_cur == "lastrowid":
-        #     rows = conn.lastrowid
-        # else:
+
         rows = await getattr(conn, func_cur)()
         await conn.close()
         if func_prepare:

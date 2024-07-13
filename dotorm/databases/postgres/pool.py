@@ -8,7 +8,7 @@ from ..types import PostgresPoolSettings
 log = logging.getLogger("dotorm")
 
 
-class Pool:
+class PostgresPool:
     def __new__(cls):
         if not hasattr(cls, "instance"):
             cls.instance = super().__new__(cls)
@@ -21,9 +21,8 @@ class Pool:
             pool = await asyncpg.create_pool(
                 **settings,
                 min_size=5,
-                # max_size=15,
+                max_size=15,
                 command_timeout=60,
-                # autocommit=False,
                 # 15 minutes
                 # max_inactive_connection_lifetime
                 # pool_recycle=60 * 15,
@@ -56,4 +55,4 @@ class Pool:
             raise e
 
 
-pg_pool = Pool()
+pg_pool = PostgresPool()

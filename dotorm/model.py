@@ -1,9 +1,7 @@
 from abc import ABCMeta
-from typing import Any, ClassVar, Type, dataclass_transform
-
 import aiomysql
 import asyncpg
-
+from typing import Any, ClassVar, Type, dataclass_transform
 
 from .fields import Field, Many2one
 
@@ -22,9 +20,6 @@ class Model(metaclass=ModelMetaclass):
     # __schema_input_create__: ClassVar[Type]
     # __schema_input_update__: ClassVar[Type]
 
-    # _transaction: Type[TransactionPostgresDotORM | TransactionMysqlDotORM] = (
-    #     TransactionMysqlDotORM
-    # )
     id: ClassVar[int]
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
