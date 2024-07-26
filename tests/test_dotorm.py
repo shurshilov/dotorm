@@ -3,7 +3,7 @@ import datetime
 from typing import Any
 
 from dotorm.orm import DotModel
-from dotorm.fields import Boolean, Char, Integer, Many2many, One2one
+from dotorm.fields import Boolean, Char, Datetime, Integer, Many2many, One2one, Char
 
 
 class MessageAttribute(DotModel):
@@ -11,12 +11,12 @@ class MessageAttribute(DotModel):
     __route__ = "/message_attributes"
 
     id: int | None = Integer(primary_key=True, default=None)
-    date_create: datetime.datetime | None = None
-    publish_date: datetime.datetime | None = None
+    date_create: datetime.datetime | None = Datetime(default=None)
+    publish_date: datetime.datetime | None = Datetime(default=None)
     # = Field(relation="many2one", relation_table=Message)
     message_id: int = Integer(default=None)
-    is_deleted: bool | None = None
-    is_draft: bool | None = None
+    is_deleted: bool | None = Boolean(default=None)
+    is_draft: bool | None = Boolean(default=None)
     show_in_account: bool = Boolean()
     send_email: bool = Boolean()
     send_telegram: bool = Boolean()
@@ -26,46 +26,46 @@ class User(DotModel):
     __table__ = "user"
 
     id: int = Integer(primary_key=True)
-    clientid: int | None = None
+    clientid: int | None = Integer(default=None)
     name: str = Char(max_length=255)
     email: str = Char(max_length=255)
-    languageid: str | None = None
-    agree_to_get_notifications: str | None = None
-    event_type_id: str | None = None
-    telegram_id: int | None = None
+    languageid: str | None = Char(default=None, max_length=255)
+    agree_to_get_notifications: str | None = Char(default=None, max_length=255)
+    event_type_id: str | None = Char(default=None, max_length=255)
+    telegram_id: int | None = Integer(default=None)
 
-    selected: bool | None = None
-    client_name: str | None = None
-    region_id: str | None = None
-    vip_status: str | None = None
-    notification_status: str | None = None
-    id_and_name: str | None = None
-    partner_id: int | None = None
-    has_partner: str | None = None
+    selected: bool | None = Boolean(default=None)
+    client_name: str | None = Char(default=None, max_length=255)
+    region_id: str | None = Char(default=None, max_length=255)
+    vip_status: str | None = Char(default=None, max_length=255)
+    notification_status: str | None = Char(default=None, max_length=255)
+    id_and_name: str | None = Char(default=None, max_length=255)
+    partner_id: int | None = Integer(default=None)
+    has_partner: str | None = Char(default=None, max_length=255)
 
 
 class Message(DotModel):
     __table__ = "message"
     __route__ = "/notifications"
 
-    date: datetime.datetime | None = None
-    subject: str | None = ""
-    publish: bool | None = False
+    date: datetime.datetime | None = Datetime(default=None)
+    subject: str | None = Char(default="", max_length=255)
+    publish: bool | None = Boolean(default=False)
     id: int | None = Integer(primary_key=True, default=None)
-    template_id: int | None = None
-    chain_id: int | None = None
-    language: str | None = None
-    body_json: str | None = "{}"
-    body: str | None = ""
-    body_telegram_json: str | None = "{}"
-    body_telegram: str | None = ""
+    template_id: int | None = Integer(default=None)
+    chain_id: int | None = Integer(default=None)
+    language: str | None = Char(default=None, max_length=255)
+    body_json: str | None = Char(default="{}", max_length=255)
+    body: str | None = Char(default="", max_length=255)
+    body_telegram_json: str | None = Char(default="{}", max_length=255)
+    body_telegram: str | None = Char(default="", max_length=255)
 
-    clientid: int | None = Integer(_store=False, default=None)
-    show_in_account: bool | None = Boolean(_store=False, default=None)
-    send_email: bool | None = Boolean(_store=False, default=None)
-    send_telegram: bool | None = Boolean(_store=False, default=None)
+    clientid: int | None = Integer(store=False, default=None)
+    show_in_account: bool | None = Boolean(store=False, default=None)
+    send_email: bool | None = Boolean(store=False, default=None)
+    send_telegram: bool | None = Boolean(store=False, default=None)
 
-    users_ids: Any = Many2many(
+    users_ids: list[User] = Many2many(
         store=False,
         relation_table=User,
         many2many_table="messageuser",
@@ -73,7 +73,7 @@ class Message(DotModel):
         column2="messageid",
     )
 
-    message_attributes_id: Any | None = One2one(
+    message_attributes_id: MessageAttribute | None = One2one(
         store=False,
         relation_table=MessageAttribute,
         relation_table_field="message_id",
@@ -94,18 +94,18 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
     def test_none_update_fields(self):
         none_update_fields = Message.get_none_update_fields_set()
         print(none_update_fields)
-        self.assertEqual(len(none_update_fields), 3)
+        self.assertEqual(len(none_update_fields), 7)
 
     def test_store_fields(self):
         store_fields = Message.get_store_fields()
         print(store_fields)
-        self.assertEqual(len(store_fields), 15)
+        self.assertEqual(len(store_fields), 11)
         self.assertEqual(type(store_fields), list)
 
     def test_store_fields_dict(self):
         store_fields = Message.get_store_fields_dict()
         print(store_fields)
-        self.assertEqual(len(store_fields), 15)
+        self.assertEqual(len(store_fields), 11)
         self.assertEqual(type(store_fields), dict)
 
     def test_get_store_fields_json(self):
@@ -122,10 +122,6 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
             "body": "",
             "body_telegram_json": "{}",
             "body_telegram": "",
-            "clientid": None,
-            "show_in_account": None,
-            "send_email": None,
-            "send_telegram": None,
         }
         res_dict = msg.json(only_store=True)
         print(res_dict)
@@ -135,7 +131,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_get(5)
         self.assertEqual(
             query[0],
-            "SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram,clientid,show_in_account,send_email,send_telegram FROM message WHERE id = %s LIMIT 1",
+            "SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram FROM message WHERE id = %s LIMIT 1",
         )
 
     async def test_builder_get_with_fields(self):
@@ -175,7 +171,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_search(filter={"id": 5})
         self.assertEqual(
             query[0],
-            """select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram,clientid,show_in_account,send_email,send_telegram from message WHERE id = %s ORDER BY id DESC """,
+            """select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram from message WHERE id = %s ORDER BY id DESC """,
         )
         query = await Message.build_search(fields=["id", "date"])
         self.assertEqual(
@@ -185,7 +181,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_search(filter={"id": [1, 2, 3]})
         self.assertEqual(
             query[0],
-            """select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram,clientid,show_in_account,send_email,send_telegram from message WHERE id in (%s, %s, %s) ORDER BY id DESC """,
+            """select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram from message WHERE id in (%s, %s, %s) ORDER BY id DESC """,
         )
 
     async def test_builder_build_table_len(self):
@@ -217,7 +213,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             query[0][0][0],
-            "SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram,clientid,show_in_account,send_email,send_telegram FROM message WHERE id = %s LIMIT 1",
+            "SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram FROM message WHERE id = %s LIMIT 1",
         )
 
         self.assertEqual(
