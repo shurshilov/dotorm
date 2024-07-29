@@ -14,6 +14,7 @@ class Model(metaclass=ModelMetaclass):
     __table__: ClassVar[str]
     __route__: ClassVar[str]
     __schema__: ClassVar[Type]
+    __auto_crud__: ClassVar[bool] = False
     __database__: ClassVar[str]
     _pool: ClassVar[aiomysql.Pool | asyncpg.Pool]
     # __schema_output_read__: ClassVar[Type]
@@ -39,6 +40,7 @@ class Model(metaclass=ModelMetaclass):
             setattr(self, name, value)
 
     def get_store_fields_instance(self):
+        "Получение значений хранящихся в бд полей"
         store_fields = {}
         for field_name, annotation in self.get_store_fields_dict().items():
             field = getattr(self, field_name)
@@ -49,6 +51,7 @@ class Model(metaclass=ModelMetaclass):
         return store_fields
 
     def get_fields_instance(self):
+        "Получение значений всех полей модели"
         fields = {}
         for field_name, annotation in self.get_fields().items():
             field = getattr(self, field_name)

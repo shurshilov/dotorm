@@ -1,5 +1,5 @@
 import datetime
-from decimal import Decimal
+from decimal import Decimal as PythonDecimal
 import logging
 from typing import Any, Type, TypeVar
 
@@ -246,7 +246,7 @@ class Boolean(Field[bool]):
     sql_type = "BOOL"
 
 
-class Decimal(Field[Decimal]):
+class Decimal(Field[PythonDecimal]):
     """
     Accurate decimal field.
 
@@ -333,7 +333,7 @@ class JSONField(Field[dict | list]):
 # class Relation: ...
 
 
-class Many2one(Field[Type[T]]):
+class Many2one(Field[T]):
     """
     Many2one field.
     """

@@ -9,6 +9,14 @@ class PostgresPoolSettings(TypedDict):
     database: str
 
 
+class ClickhousePoolSettings(TypedDict):
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
+
+
 class MysqlPoolSettings(TypedDict):
     host: str
     port: int
