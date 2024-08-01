@@ -1,6 +1,5 @@
 import unittest
 import datetime
-from typing import Any
 
 from dotorm.orm import DotModel
 from dotorm.fields import Boolean, Char, Datetime, Integer, Many2many, One2one, Char
@@ -10,10 +9,9 @@ class MessageAttribute(DotModel):
     __table__ = "message_attributes"
     __route__ = "/message_attributes"
 
-    id: int | None = Integer(primary_key=True, default=None)
+    id: int = Integer(primary_key=True)
     date_create: datetime.datetime | None = Datetime(default=None)
     publish_date: datetime.datetime | None = Datetime(default=None)
-    # = Field(relation="many2one", relation_table=Message)
     message_id: int = Integer(default=None)
     is_deleted: bool | None = Boolean(default=None)
     is_draft: bool | None = Boolean(default=None)
@@ -51,7 +49,7 @@ class Message(DotModel):
     date: datetime.datetime | None = Datetime(default=None)
     subject: str | None = Char(default="", max_length=255)
     publish: bool | None = Boolean(default=False)
-    id: int | None = Integer(primary_key=True, default=None)
+    id: int = Integer(primary_key=True)
     template_id: int | None = Integer(default=None)
     chain_id: int | None = Integer(default=None)
     language: str | None = Char(default=None, max_length=255)
