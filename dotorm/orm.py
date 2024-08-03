@@ -8,7 +8,7 @@ from .databases.postgres.session import (
 )
 
 from .fields import Field, Many2many, Many2one, One2many, One2one
-from .builder import Builder
+from .builder.builder import Builder
 
 
 class DotModel(Builder):
@@ -54,7 +54,7 @@ class DotModel(Builder):
         return decorator
 
     async def delete(self, session):
-        stmt, values = await self.build_delete()
+        stmt, values = await self.build_delete(self.id)
         func_prepare = None
         func_cur = "fetchall"
 
@@ -63,7 +63,7 @@ class DotModel(Builder):
     async def update(self, session, payload: Self | None = None, fields=[]):
         if not payload:
             payload = self
-        stmt, values = await self.build_update(payload, fields)
+        stmt, values = await self.build_update(payload, self.id, fields)
         func_prepare = None
         func_cur = "fetchall"
 
@@ -76,7 +76,8 @@ class DotModel(Builder):
         func_cur = "fetchall"
 
         record = await session.execute(stmt, values, func_prepare, func_cur)
-        assert record is not None
+        if not record:
+            return record
         assert isinstance(record, cls)
         return record
 
@@ -298,27 +299,49 @@ class DotModel(Builder):
 
     @classmethod
     async def __create_table__(cls, session):
-        # Метод для создания таблицы в базе данных, основанной на атрибутах класса.
+        """Метод для создания таблицы в базе данных, основанной на атрибутах класса."""
 
-        # Создаём список custom_fields для хранения определений полей таблицы.
         fields_created = []
+        many2one_fields_fk = []
 
         # Проходимся по атрибутам класса и извлекаем информацию о полях.
         for field_name, field in cls.get_fields().items():
-            if isinstance(field, Field) and field.store and not field.relation:
-                # Создаём строку с определением поля и добавляем её в список custom_fields.
-                field_declaration = [f'"{field_name}" {field.sql_type}']
+            if isinstance(field, Field):
+                if (field.store and not field.relation) or isinstance(field, Many2one):
+                    # Создаём строку с определением поля и добавляем её в список custom_fields.
+                    field_declaration = [f'"{field_name}" {field.sql_type}']
 
-                if field.unique:
-                    field_declaration.append("UNIQUE")
-                if not field.null:
-                    field_declaration.append("NOT NULL")
-                if field.primary_key:
-                    field_declaration.append("PRIMARY KEY")
-                if field.default is not None:
-                    field_declaration.append(f"DEFAULT {field.default}")
+                    if field.unique:
+                        field_declaration.append("UNIQUE")
+                    if not field.null:
+                        field_declaration.append("NOT NULL")
+                    if field.primary_key:
+                        field_declaration.append("PRIMARY KEY")
+                    if field.default is not None:
+                        field_declaration.append(f"DEFAULT {field.default}")
 
-                fields_created.append(" ".join(field_declaration))
+                    if isinstance(field, Many2one):
+                        # не забыть создать FK для many2one
+                        # ALTER TABLE %s ADD FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s",
+                        many2one_fields_fk.append(
+                            f"ALTER TABLE IF EXISTS {cls.__table__} ADD FOREIGN KEY ({field_name}) REFERENCES {field.relation_table.__table__}(id) ON DELETE {field.ondelete}"
+                        )
+
+                    fields_created.append(" ".join(field_declaration))
+
+                # создаем промежуточную таблицу для many2many
+                if field.relation and isinstance(field, Many2many):
+                    column1 = f'"{field.column1}" INTEGER NOT NULL'
+                    column2 = f'"{field.column2}" INTEGER NOT NULL'
+                    # COMMENT ON TABLE {field.many2many_table} IS f"RELATION BETWEEN {model._table} AND {comodel._table}";
+                    # CREATE INDEX ON {field.many2many_table} ({field.column1}, {field.column2});
+                    # PRIMARY KEY({field.column1}, {field.column2})
+                    create_table_sql = f"""\
+                    CREATE TABLE IF NOT EXISTS {field.many2many_table} (\
+                    {', '.join([column1, column2])}\
+                    );
+                    """
+                    res = await session.execute(create_table_sql)
 
         # Создаём SQL-запрос для создания таблицы с определёнными полями.
         create_table_sql = f"""\
@@ -328,4 +351,4 @@ CREATE TABLE IF NOT EXISTS {cls.__table__} (\
 
         # Выполняем SQL-запрос.
         res = await session.execute(create_table_sql)
-        return res
+        return many2one_fields_fk

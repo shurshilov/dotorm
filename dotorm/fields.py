@@ -49,14 +49,12 @@ class Field[FieldType]:
     description: str | None = None
     default: FieldType | None = None
 
+    ondelete: str = "set null"
     relation: bool = False
     relation_table: Any = None
     relation_table_field: str | None = None
 
     def __init__(self, **kwargs: Any) -> None:
-        self.python_type: type = kwargs.pop("python_type", None)
-        self.pydantic_type: type = kwargs.pop("pydantic_type", None)
-
         self.indexable = kwargs.pop("indexable", False)
         self.store = kwargs.pop("store", True)
         self.primary_key = kwargs.pop("primary_key", False)
@@ -64,6 +62,8 @@ class Field[FieldType]:
         self.unique = kwargs.pop("unique", False)
         self.description = kwargs.pop("description", None)
         self.default = kwargs.pop("default", None)
+        # self.ondelete = "restrict" if self.required else "set null"
+        self.ondelete = "set null" if self.null else "restrict"
 
         for name, value in kwargs.items():
             setattr(self, name, value)
@@ -75,6 +75,7 @@ class Field[FieldType]:
         return super().__new__(cls)
 
     def validation(self):
+        # if self.ondelete == 'set null' and self.required:
         if not self.indexable and (self.unique or self.index):
             raise OrmConfigurationFieldException(
                 f"{self.__class__.__name__} can't be indexed"
@@ -131,7 +132,18 @@ class Field[FieldType]:
 
         It needs to be non-nullable and not have a default or be DB-generated to be required.
         """
-        return self.default is None and not self.null and not self.store
+        # return self.default is None and not self.null and not self.store
+        return not self.null
+
+    @property
+    def relation_table(self):
+        if callable(self._relation_table):
+            return self._relation_table()
+        return self._relation_table
+
+    @relation_table.setter
+    def relation_table(self, table):
+        self._relation_table = table
 
 
 class Integer(Field[int]):
@@ -339,16 +351,15 @@ class Many2one(Field[T]):
     """
 
     field_type = Type
-    sql_type = "SERIAL"
+    sql_type = "INTEGER"
     relation = True
 
     def __init__(self, relation_table: Type, **kwargs: Any) -> None:
-        self.relation_table = relation_table
-        # self.relation = kwargs.get("relation", True)
+        self._relation_table = relation_table
         super().__init__(**kwargs)
 
 
-class Many2many(Field[list[Type[T]]]):
+class Many2many(Field[list[T]]):
     """
     Many2many field.
     """
@@ -359,7 +370,7 @@ class Many2many(Field[list[Type[T]]]):
 
     def __init__(
         self,
-        relation_table: Type[T],
+        relation_table: T,
         many2many_table: str,
         column1: str,
         column2: str,
@@ -367,13 +378,12 @@ class Many2many(Field[list[Type[T]]]):
     ) -> None:
         self.relation_table = relation_table
         self.many2many_table = many2many_table
-        self.column1 = column1
+        self.column1: str = column1
         self.column2 = column2
-        # self.relation = kwargs.get("relation", True)
         super().__init__(**kwargs)
 
 
-class One2many(Field[list[Type[T]]]):
+class One2many(Field[list[T]]):
     """
     One2many field.
     """
@@ -384,13 +394,12 @@ class One2many(Field[list[Type[T]]]):
 
     def __init__(
         self,
-        relation_table: Type,
+        relation_table: T,
         relation_table_field: str,
         **kwargs: Any,
     ) -> None:
-        self.relation_table = relation_table
+        self._relation_table = relation_table
         self.relation_table_field = relation_table_field
-        # self.relation = kwargs.get("relation", True)
         super().__init__(**kwargs)
 
 
@@ -405,11 +414,10 @@ class One2one(Field[T]):
 
     def __init__(
         self,
-        relation_table: Type,
+        relation_table: T,
         relation_table_field: str,
         **kwargs: Any,
     ) -> None:
         self.relation_table = relation_table
         self.relation_table_field = relation_table_field
-        # self.relation = kwargs.get("relation", True)
         super().__init__(**kwargs)

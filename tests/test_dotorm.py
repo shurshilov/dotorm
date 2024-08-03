@@ -141,7 +141,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
 
     async def test_builder_build_delete(self):
         msg = Message(id=5, language="ru")
-        query = await msg.build_delete()
+        query = await msg.build_delete(msg.id)
         self.assertEqual(
             query[0],
             "DELETE FROM message WHERE id=%s",
@@ -158,7 +158,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
     async def test_builder_build_update(self):
         msg = Message(id=5, language="ru")
         msg_new = Message(id=5, language="en")
-        query = await msg.build_update(msg_new)
+        query = await msg.build_update(msg_new, msg_new.id)
         self.assertEqual(
             query[0],
             """UPDATE message SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s WHERE id = %s""",

@@ -94,21 +94,18 @@ class Model(metaclass=ModelMetaclass):
         """десериализация из словаря в обьект"""
         return cls(**r[0])
 
-    # @classmethod
-    # def get_field(cls, field_name: str) -> Field:
-    #     return getattr(cls, field_name)
-
-    # @classmethod
-    # def get_fields_name(cls):
-    #     return [field_name for field_name, annotation in cls.__annotations__.items()]
-
     @classmethod
     def get_fields(cls) -> dict[str, Field]:
         return {
-            # cls.__dict__[field_name]
-            field_name: getattr(cls, field_name)
-            for field_name, annotation in cls.__annotations__.items()
+            k: v
+            for k, v in cls.__dict__.items()
+            if not callable(v) and not k.startswith("_")
         }
+        # return {
+        #     # cls.__dict__[field_name]
+        #     field_name: getattr(cls, field_name)
+        #     for field_name, annotation in cls.__annotations__.items()
+        # }
 
     @classmethod
     def get_relation_fields(cls):
@@ -130,12 +127,10 @@ class Model(metaclass=ModelMetaclass):
             name
             for name, field in cls.get_fields().items()
             if isinstance(field, Field)
-            # and not name.startswith("_")
             and (
                 not field.store
                 or field.primary_key
                 or (field.relation and not isinstance(field, Many2one))
-                # or field.get("relation", "many2one") != "many2one"
             )
         }
 
@@ -148,8 +143,7 @@ class Model(metaclass=ModelMetaclass):
         return [
             name
             for name, field in cls.get_fields().items()
-            if (isinstance(field, Field) and field.store and not field.relation)
-            or (not isinstance(field, Field) and not name.startswith("_"))
+            if isinstance(field, Field) and field.store
         ]
 
     @classmethod
@@ -157,6 +151,5 @@ class Model(metaclass=ModelMetaclass):
         return {
             name: field
             for name, field in cls.get_fields().items()
-            if (isinstance(field, Field) and field.store and not field.relation)
-            or (not isinstance(field, Field) and not name.startswith("_"))
+            if isinstance(field, Field) and field.store
         }

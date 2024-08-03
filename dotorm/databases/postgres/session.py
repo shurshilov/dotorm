@@ -87,7 +87,7 @@ class PostgresSessionWithPool(SessionAbstract):
                 for rec in rows:
                     rows_dict.append(dict(rec))
 
-            if func_prepare:
+            if func_prepare and rows_dict:
                 return func_prepare(rows_dict)
             return rows_dict or rows
 
