@@ -7,7 +7,11 @@ from .helpers import build_sql_create_from_schema, build_sql_update_from_schema
 class BuilderCRUD(Model):
     @classmethod
     async def build_get(cls, id, fields=[]):
-        fields = ",".join(fields) if fields else ",".join(cls.get_store_fields())
+        # fields = ",".join(fields) if fields else ",".join(cls.get_store_fields())
+        if not fields:
+            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
+        else:
+            fields = ",".join(f'"{name}"' for name in fields)
         stmt = f"SELECT {fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
         return stmt, [id]
 

@@ -129,14 +129,14 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_get(5)
         self.assertEqual(
             query[0],
-            "SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram FROM message WHERE id = %s LIMIT 1",
+            'SELECT "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" FROM message WHERE id = %s LIMIT 1',
         )
 
     async def test_builder_get_with_fields(self):
         query = await Message.build_get(5, ["id", "date"])
         self.assertEqual(
             query[0],
-            "SELECT id,date FROM message WHERE id = %s LIMIT 1",
+            'SELECT "id","date" FROM message WHERE id = %s LIMIT 1',
         )
 
     async def test_builder_build_delete(self):
@@ -169,17 +169,17 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_search(filter={"id": 5})
         self.assertEqual(
             query[0],
-            """select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram from message WHERE id = %s ORDER BY id DESC """,
+            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id = %s ORDER BY id DESC """,
         )
         query = await Message.build_search(fields=["id", "date"])
         self.assertEqual(
             query[0],
-            """select id,date from message  ORDER BY id DESC """,
+            """select "id","date" from message  ORDER BY id DESC """,
         )
         query = await Message.build_search(filter={"id": [1, 2, 3]})
         self.assertEqual(
             query[0],
-            """select date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram from message WHERE id in (%s, %s, %s) ORDER BY id DESC """,
+            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id in (%s, %s, %s) ORDER BY id DESC """,
         )
 
     async def test_builder_build_table_len(self):
@@ -211,12 +211,12 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             query[0][0][0],
-            "SELECT date,subject,publish,id,template_id,chain_id,language,body_json,body,body_telegram_json,body_telegram FROM message WHERE id = %s LIMIT 1",
+            'SELECT "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" FROM message WHERE id = %s LIMIT 1',
         )
 
         self.assertEqual(
             query[0][1][0],
-            "select id,date_create,publish_date,message_id,is_deleted,is_draft,show_in_account,send_email,send_telegram from message_attributes WHERE message_id = %s ORDER BY id DESC LIMIT %s",
+            'select "id","date_create","publish_date","message_id","is_deleted","is_draft","show_in_account","send_email","send_telegram" from message_attributes WHERE message_id = %s ORDER BY id DESC LIMIT %s',
         )
 
     async def test_builder_build_update_with_relations(self):
