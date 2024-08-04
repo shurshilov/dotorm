@@ -51,7 +51,6 @@ class Field[FieldType]:
 
     ondelete: str = "set null"
     relation: bool = False
-    relation_table: Any = None
     relation_table_field: str | None = None
 
     def __init__(self, **kwargs: Any) -> None:
