@@ -46,24 +46,24 @@ class Message(DotModel):
     __table__ = "message"
     __route__ = "/notifications"
 
-    date: datetime.datetime | None = Datetime(default=None)
-    subject: str | None = Char(default="", max_length=255)
-    publish: bool | None = Boolean(default=False)
-    id: int = Integer(primary_key=True)
-    template_id: int | None = Integer(default=None)
-    chain_id: int | None = Integer(default=None)
-    language: str | None = Char(default=None, max_length=255)
-    body_json: str | None = Char(default="{}", max_length=255)
-    body: str | None = Char(default="", max_length=255)
-    body_telegram_json: str | None = Char(default="{}", max_length=255)
-    body_telegram: str | None = Char(default="", max_length=255)
+    date = Datetime(default=None)
+    subject = Char(default="", max_length=255)
+    publish = Boolean(default=False)
+    id = Integer(primary_key=True)
+    template_id = Integer(default=None)
+    chain_id = Integer(default=None)
+    language = Char(default=None, max_length=255)
+    body_json = Char(default="{}", max_length=255)
+    body = Char(default="", max_length=255)
+    body_telegram_json = Char(default="{}", max_length=255)
+    body_telegram = Char(default="", max_length=255)
 
-    clientid: int | None = Integer(store=False, default=None)
-    show_in_account: bool | None = Boolean(store=False, default=None)
-    send_email: bool | None = Boolean(store=False, default=None)
-    send_telegram: bool | None = Boolean(store=False, default=None)
+    clientid = Integer(store=False, default=None)
+    show_in_account = Boolean(store=False, default=None)
+    send_email = Boolean(store=False, default=None)
+    send_telegram = Boolean(store=False, default=None)
 
-    users_ids: list[User] = Many2many(
+    users_ids = Many2many[User](
         store=False,
         relation_table=User,
         many2many_table="messageuser",
@@ -71,7 +71,7 @@ class Message(DotModel):
         column2="messageid",
     )
 
-    message_attributes_id: MessageAttribute | None = One2one(
+    message_attributes_id = One2one[MessageAttribute](
         store=False,
         relation_table=MessageAttribute,
         relation_table_field="message_id",

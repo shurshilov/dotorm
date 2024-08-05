@@ -1,7 +1,10 @@
 import datetime
 from decimal import Decimal as PythonDecimal
 import logging
-from typing import Any, Type
+from typing import TYPE_CHECKING, Any, Type
+
+if TYPE_CHECKING:
+    from .orm import DotModel
 
 
 log = logging.getLogger("dotorm")
@@ -151,7 +154,6 @@ class Integer(Field[int]):
         True if field is Primary Key.
     """
 
-    field_type = int
     sql_type = "INTEGER"
 
     # @property
@@ -209,8 +211,6 @@ class Char(Field[str]):
         Maximum length of the field in characters.
     """
 
-    field_type = str
-
     def __init__(self, max_length: int, **kwargs: Any) -> None:
         if int(max_length) < 1:
             raise OrmConfigurationFieldException("'max_length' must be >= 1")
@@ -227,7 +227,6 @@ class Text(Field[str]):  # type: ignore
     Large Text field.
     """
 
-    field_type = str
     indexable = False
     sql_type = "TEXT"
 
@@ -251,7 +250,6 @@ class Boolean(Field[bool]):
     Boolean field.
     """
 
-    field_type = bool
     sql_type = "BOOL"
 
 
@@ -342,7 +340,7 @@ class JSONField(Field[dict | list]):
 # class Relation: ...
 
 
-class Many2one[T](Field[T]):
+class Many2one[T: "DotModel"](Field[T]):
     """
     Many2one field.
     """
@@ -356,12 +354,11 @@ class Many2one[T](Field[T]):
         super().__init__(**kwargs)
 
 
-class Many2many[T](Field[list[T]]):
+class Many2many[T: "DotModel"](Field[list[T]]):
     """
     Many2many field.
     """
 
-    field_type = list[Type]
     store = False
     relation = True
 
@@ -380,12 +377,11 @@ class Many2many[T](Field[list[T]]):
         super().__init__(**kwargs)
 
 
-class One2many[T](Field[list[T]]):
+class One2many[T: "DotModel"](Field[list[T]]):
     """
     One2many field.
     """
 
-    field_type = list[Type]
     store = False
     relation = True
 
@@ -400,12 +396,11 @@ class One2many[T](Field[list[T]]):
         super().__init__(**kwargs)
 
 
-class One2one[T](Field[T]):
+class One2one[T: "DotModel"](Field[T]):
     """
     One2one field.
     """
 
-    field_type = Type
     store = False
     relation = True
 
