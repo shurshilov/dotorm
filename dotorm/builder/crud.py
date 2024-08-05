@@ -8,10 +8,10 @@ class BuilderCRUD(Model):
     @classmethod
     async def build_get(cls, id, fields=[]):
         if not fields:
-            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
-        else:
-            fields = ",".join(f'"{name}"' for name in fields)
-        stmt = f"SELECT {fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
+            fields = cls.get_store_fields()
+
+        select_fields = ",".join(f'"{name}"' for name in fields)
+        stmt = f"SELECT {select_fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
         return stmt, [id]
 
     async def build_delete(self, id):
@@ -44,9 +44,9 @@ class BuilderCRUD(Model):
         raw=None,
     ):
         if not fields:
-            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
-        else:
-            fields = ",".join(f'"{name}"' for name in fields)
+            fields = cls.get_store_fields()
+
+        select_fields = ",".join(f'"{name}"' for name in fields)
         where = ""
         where_values = ()
         if filter:
@@ -78,7 +78,8 @@ class BuilderCRUD(Model):
             if where_condition:
                 where = "WHERE " + " and ".join(where_condition)
 
-        stmt = f"select {fields} from {cls.__table__} {where} ORDER BY {sort} {order} "
+        # TODO: fix sql injection
+        stmt = f"select {select_fields} from {cls.__table__} {where} ORDER BY {sort} {order} "
 
         if end != None and start != None:
             stmt += "LIMIT %s, %s"

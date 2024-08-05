@@ -18,6 +18,7 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
         if not relation_fields:
             relation_fields = cls.get_relation_fields()
         else:
+            # проверка что поля действительно relaton, можно убрать
             relation_fields = [
                 (name, field)
                 for name, field in cls.get_relation_fields()
@@ -41,9 +42,9 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
                     await cls.build_get_many2many(
                         id,
                         relation_table,
-                        field.many2many_table or False,
-                        field.column1 or False,
-                        field.column2 or False,
+                        field.many2many_table,
+                        field.column1,
+                        field.column2,
                     )
                 )
             elif isinstance(field, One2many):
@@ -56,6 +57,9 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
                 field_name_list.append(name)
                 field_list.append(field)
                 request_list.append(
+                    # await cls.build_get_one2one(
+                    #     relation_table, relation_table_field, id
+                    # )
                     await relation_table.build_search(
                         filter={relation_table_field: id},
                         limit=1,
