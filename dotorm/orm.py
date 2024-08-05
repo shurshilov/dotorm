@@ -2,6 +2,8 @@ import asyncio
 import datetime
 from typing import ClassVar, Self
 
+from .databases.sesson_abstract import SessionAbstract
+
 from .databases.postgres.session import (
     PostgresSessionWithPool,
     PostgresSessionWithTransactionSingleConnection,
@@ -53,14 +55,16 @@ class DotModel(Builder):
 
         return decorator
 
-    async def delete(self, session):
+    async def delete(self, session: SessionAbstract):
         stmt, values = await self.build_delete(self.id)
         func_prepare = None
         func_cur = "fetchall"
 
         return await session.execute(stmt, values, func_prepare, func_cur)
 
-    async def update(self, session, payload: Self | None = None, fields=[]):
+    async def update(
+        self, session: SessionAbstract, payload: Self | None = None, fields=[]
+    ):
         if not payload:
             payload = self
         stmt, values = await self.build_update(payload, self.id, fields)
@@ -70,7 +74,7 @@ class DotModel(Builder):
         return await session.execute(stmt, values, func_prepare, func_cur)
 
     @classmethod
-    async def get(cls, session, id, fields=[]):
+    async def get(cls, session: SessionAbstract, id, fields=[]):
         stmt, values = await cls.build_get(id, fields)
         func_prepare = cls.prepare_id
         func_cur = "fetchall"
@@ -82,7 +86,7 @@ class DotModel(Builder):
         return record
 
     @classmethod
-    async def create(cls, session, payload):
+    async def create(cls, session: SessionAbstract, payload):
         stmt, values = await cls.build_create(payload)
         func_prepare = None
         func_cur = "lastrowid"
@@ -106,7 +110,7 @@ class DotModel(Builder):
     @classmethod
     async def search(
         cls,
-        session,
+        session: SessionAbstract,
         start=None,
         end=None,
         limit=None,
@@ -127,7 +131,7 @@ class DotModel(Builder):
         return records
 
     @classmethod
-    async def table_len(cls, session):
+    async def table_len(cls, session: SessionAbstract):
         stmt, values = await cls.build_table_len()
         func_prepare = lambda rows: [r["COUNT(*)"] for r in rows]
         if type(session) in [
@@ -146,7 +150,7 @@ class DotModel(Builder):
     # RELASHIONSHIP
     @classmethod
     async def get_with_relations_concurrent(
-        cls, session, id, fields=[], relation_fields=[]
+        cls, session: SessionAbstract, id, fields=[], relation_fields=[]
     ):
         """Выполняется ПАРАЛЛЕЛЬНО в нескольких соединениях, без транзакций"""
         request_list, field_name_list, field_list = await cls.build_get_with_relations(
@@ -184,7 +188,9 @@ class DotModel(Builder):
         return record
 
     @classmethod
-    async def get_with_relations(cls, session, id, fields=[], relation_fields=[]):
+    async def get_with_relations(
+        cls, session: SessionAbstract, id, fields=[], relation_fields=[]
+    ):
         """Выполняется ПОСЛЕДОВАТЕЛЬНО в нескольких соединениях, без транзакций"""
         request_list, field_name_list, field_list = await cls.build_get_with_relations(
             id, fields, relation_fields
@@ -222,7 +228,9 @@ class DotModel(Builder):
 
         return record
 
-    async def update_with_relations(self, session, payload: Self, fields=[]):
+    async def update_with_relations(
+        self, session: SessionAbstract, payload: Self, fields=[]
+    ):
         """Выполняется ПОСЛЕДОВАТЕЛЬНО в одном соединении"""
         request_list, field_list = await self.build_update_with_relations(
             payload, fields
@@ -255,7 +263,7 @@ class DotModel(Builder):
         return results
 
     @classmethod
-    async def create_with_relations(cls, session, payload=None):
+    async def create_with_relations(cls, session: SessionAbstract, payload=None):
         request_list = await cls.build_create_with_relations(payload)
         request_list = [
             session.execute(stmt=i[0], val=i[1], func_prepare=None, func_cur="fetchall")
@@ -275,7 +283,7 @@ class DotModel(Builder):
     #         res = await cls._transaction.execute(stmt, values, func_prepare, func_cur)
     #     return res
 
-    async def update_one2one(self, session, fk_id, fields=[], fk="id"):
+    async def update_one2one(self, session: SessionAbstract, fk_id, fields=[], fk="id"):
         stmt, values = await self.build_update_one2one(fk_id, fields, fk)
         func_prepare = None
         func_cur = "fetchall"
@@ -286,7 +294,14 @@ class DotModel(Builder):
     # TODO: universal
     @classmethod
     async def get_many2many(
-        cls, session, id, comodel, relation, column1, column2, fields=[]
+        cls,
+        session: SessionAbstract,
+        id,
+        comodel,
+        relation,
+        column1,
+        column2,
+        fields=[],
     ):
         stmt, values = await cls.build_get_many2many(
             id, comodel, relation, column1, column2, fields

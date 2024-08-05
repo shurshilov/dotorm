@@ -1,13 +1,11 @@
 import datetime
 from decimal import Decimal as PythonDecimal
 import logging
-from typing import Any, Type, TypeVar
+from typing import Any, Type
 
 
 log = logging.getLogger("dotorm")
 from .exceptions import OrmConfigurationFieldException
-
-T = TypeVar("T")
 
 
 class Field[FieldType]:
@@ -344,7 +342,7 @@ class JSONField(Field[dict | list]):
 # class Relation: ...
 
 
-class Many2one(Field[T]):
+class Many2one[T](Field[T]):
     """
     Many2one field.
     """
@@ -358,7 +356,7 @@ class Many2one(Field[T]):
         super().__init__(**kwargs)
 
 
-class Many2many(Field[list[T]]):
+class Many2many[T](Field[list[T]]):
     """
     Many2many field.
     """
@@ -382,7 +380,7 @@ class Many2many(Field[list[T]]):
         super().__init__(**kwargs)
 
 
-class One2many(Field[list[T]]):
+class One2many[T](Field[list[T]]):
     """
     One2many field.
     """
@@ -402,7 +400,7 @@ class One2many(Field[list[T]]):
         super().__init__(**kwargs)
 
 
-class One2one(Field[T]):
+class One2one[T](Field[T]):
     """
     One2one field.
     """
