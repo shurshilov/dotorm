@@ -2,8 +2,6 @@ import asyncio
 import datetime
 from typing import ClassVar, Self
 
-from .databases.sesson_abstract import SessionAbstract
-
 from .databases.postgres.session import (
     PostgresSessionWithPool,
     PostgresSessionWithTransactionSingleConnection,
@@ -55,16 +53,24 @@ class DotModel(Builder):
 
         return decorator
 
-    async def delete(self, session: SessionAbstract):
-        stmt, values = await self.build_delete(self.id)
+    async def delete(self, session):
+        stmt = await self.build_delete()
+        values = self.id
         func_prepare = None
         func_cur = "fetchall"
 
         return await session.execute(stmt, values, func_prepare, func_cur)
 
-    async def update(
-        self, session: SessionAbstract, payload: Self | None = None, fields=[]
-    ):
+    @classmethod
+    async def delete_bulk(cls, session, ids: list[int]):
+        stmt = await cls.build_delete_bulk(len(ids))
+        values = ids
+        func_prepare = None
+        func_cur = "fetchall"
+
+        return await session.execute(stmt, values, func_prepare, func_cur)
+
+    async def update(self, session, payload: Self | None = None, fields=[]):
         if not payload:
             payload = self
         stmt, values = await self.build_update(payload, self.id, fields)
@@ -74,7 +80,7 @@ class DotModel(Builder):
         return await session.execute(stmt, values, func_prepare, func_cur)
 
     @classmethod
-    async def get(cls, session: SessionAbstract, id, fields=[]):
+    async def get(cls, session, id, fields=[]):
         stmt, values = await cls.build_get(id, fields)
         func_prepare = cls.prepare_id
         func_cur = "fetchall"
@@ -86,7 +92,7 @@ class DotModel(Builder):
         return record
 
     @classmethod
-    async def create(cls, session: SessionAbstract, payload):
+    async def create(cls, session, payload):
         stmt, values = await cls.build_create(payload)
         func_prepare = None
         func_cur = "lastrowid"
@@ -110,18 +116,18 @@ class DotModel(Builder):
     @classmethod
     async def search(
         cls,
-        session: SessionAbstract,
+        session,
+        fields=None,
         start=None,
         end=None,
         limit=None,
         order="DESC",
         sort="id",
         filter=None,
-        fields=[],
         raw=None,
-    ):
+    ) -> list[Self]:
         stmt, values = await cls.build_search(
-            start, end, limit, order, sort, filter, fields, raw
+            fields, start, end, limit, order, sort, filter
         )
         func_prepare = cls.prepare_ids if not raw else None
         func_cur = "fetchall"
@@ -131,7 +137,7 @@ class DotModel(Builder):
         return records
 
     @classmethod
-    async def table_len(cls, session: SessionAbstract):
+    async def table_len(cls, session):
         stmt, values = await cls.build_table_len()
         func_prepare = lambda rows: [r["COUNT(*)"] for r in rows]
         if type(session) in [
@@ -150,7 +156,7 @@ class DotModel(Builder):
     # RELASHIONSHIP
     @classmethod
     async def get_with_relations_concurrent(
-        cls, session: SessionAbstract, id, fields=[], relation_fields=[]
+        cls, session, id, fields=[], relation_fields=[]
     ):
         """Выполняется ПАРАЛЛЕЛЬНО в нескольких соединениях, без транзакций"""
         request_list, field_name_list, field_list = await cls.build_get_with_relations(
@@ -188,9 +194,7 @@ class DotModel(Builder):
         return record
 
     @classmethod
-    async def get_with_relations(
-        cls, session: SessionAbstract, id, fields=[], relation_fields=[]
-    ):
+    async def get_with_relations(cls, session, id, fields=[], relation_fields=[]):
         """Выполняется ПОСЛЕДОВАТЕЛЬНО в нескольких соединениях, без транзакций"""
         request_list, field_name_list, field_list = await cls.build_get_with_relations(
             id, fields, relation_fields
@@ -228,9 +232,7 @@ class DotModel(Builder):
 
         return record
 
-    async def update_with_relations(
-        self, session: SessionAbstract, payload: Self, fields=[]
-    ):
+    async def update_with_relations(self, session, payload: Self, fields=[]):
         """Выполняется ПОСЛЕДОВАТЕЛЬНО в одном соединении"""
         request_list, field_list = await self.build_update_with_relations(
             payload, fields
@@ -263,7 +265,7 @@ class DotModel(Builder):
         return results
 
     @classmethod
-    async def create_with_relations(cls, session: SessionAbstract, payload=None):
+    async def create_with_relations(cls, session, payload=None):
         request_list = await cls.build_create_with_relations(payload)
         request_list = [
             session.execute(stmt=i[0], val=i[1], func_prepare=None, func_cur="fetchall")
@@ -283,7 +285,7 @@ class DotModel(Builder):
     #         res = await cls._transaction.execute(stmt, values, func_prepare, func_cur)
     #     return res
 
-    async def update_one2one(self, session: SessionAbstract, fk_id, fields=[], fk="id"):
+    async def update_one2one(self, session, fk_id, fields=[], fk="id"):
         stmt, values = await self.build_update_one2one(fk_id, fields, fk)
         func_prepare = None
         func_cur = "fetchall"
@@ -294,14 +296,7 @@ class DotModel(Builder):
     # TODO: universal
     @classmethod
     async def get_many2many(
-        cls,
-        session: SessionAbstract,
-        id,
-        comodel,
-        relation,
-        column1,
-        column2,
-        fields=[],
+        cls, session, id, comodel, relation, column1, column2, fields=[]
     ):
         stmt, values = await cls.build_get_many2many(
             id, comodel, relation, column1, column2, fields
@@ -312,12 +307,21 @@ class DotModel(Builder):
         res = await session.execute(stmt, values, func_prepare, func_cur)
         return res
 
+    # @classmethod
+    # async def __create_new_fields__(cls, session):
+    #     """Создает новые поля, если таблица уже создана в базе данных,
+    #     но после этого добавили новые поля"""
+
     @classmethod
     async def __create_table__(cls, session):
         """Метод для создания таблицы в базе данных, основанной на атрибутах класса."""
 
-        fields_created = []
-        many2one_fields_fk = []
+        # описание поля для создания в бд со всеми аттрибутами
+        fields_created_declaration: list[str] = []
+        # только текстовые названия полей
+        fields_created: list = []
+        # готовый запрос на добавления FK
+        many2one_fields_fk: list[str] = []
 
         # Проходимся по атрибутам класса и извлекаем информацию о полях.
         for field_name, field in cls.get_fields().items():
@@ -342,7 +346,9 @@ class DotModel(Builder):
                             f"ALTER TABLE IF EXISTS {cls.__table__} ADD FOREIGN KEY ({field_name}) REFERENCES {field.relation_table.__table__}(id) ON DELETE {field.ondelete}"
                         )
 
-                    fields_created.append(" ".join(field_declaration))
+                    field_declaration_str = " ".join(field_declaration)
+                    fields_created_declaration.append(field_declaration_str)
+                    fields_created.append([field_name, field_declaration_str])
 
                 # создаем промежуточную таблицу для many2many
                 if field.relation and isinstance(field, Many2many):
@@ -361,8 +367,20 @@ class DotModel(Builder):
         # Создаём SQL-запрос для создания таблицы с определёнными полями.
         create_table_sql = f"""\
 CREATE TABLE IF NOT EXISTS {cls.__table__} (\
-{', '.join(fields_created)}\
+{', '.join(fields_created_declaration)}\
 );"""
+
+        # если таблицы уже были созданы, но появились новые поля
+        # необходимо их добавить
+        for field_name, field_declaration in fields_created:
+            sql = f"""SELECT column_name FROM information_schema.columns
+WHERE table_name='{cls.__table__}' and column_name='{field_name}';"""
+
+            field_exist = await session.execute(sql)
+            if field_exist == "SELECT 0":
+                await session.execute(
+                    f"""ALTER TABLE {cls.__table__} ADD COLUMN {field_declaration};"""
+                )
 
         # Выполняем SQL-запрос.
         res = await session.execute(create_table_sql)

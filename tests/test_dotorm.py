@@ -141,9 +141,9 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
 
     async def test_builder_build_delete(self):
         msg = Message(id=5, language="ru")
-        query = await msg.build_delete(msg.id)
+        query = await msg.build_delete()
         self.assertEqual(
-            query[0],
+            query,
             "DELETE FROM message WHERE id=%s",
         )
 
@@ -158,7 +158,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
     async def test_builder_build_update(self):
         msg = Message(id=5, language="ru")
         msg_new = Message(id=5, language="en")
-        query = await msg.build_update(msg_new, msg_new.id)
+        query = await msg.build_update(payload=msg_new, id=msg.id)
         self.assertEqual(
             query[0],
             """UPDATE message SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s WHERE id = %s""",
@@ -169,17 +169,17 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_search(filter={"id": 5})
         self.assertEqual(
             query[0],
-            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id = %s ORDER BY id DESC """,
+            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id = %s ORDER BY id ASC """,
         )
         query = await Message.build_search(fields=["id", "date"])
         self.assertEqual(
             query[0],
-            """select "id","date" from message  ORDER BY id DESC """,
+            """select "id","date" from message  ORDER BY id ASC """,
         )
         query = await Message.build_search(filter={"id": [1, 2, 3]})
         self.assertEqual(
             query[0],
-            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id in (%s, %s, %s) ORDER BY id DESC """,
+            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id in (%s, %s, %s) ORDER BY id ASC """,
         )
 
     async def test_builder_build_table_len(self):
@@ -216,27 +216,22 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             query[0][1][0],
-            'select "id","date_create","publish_date","message_id","is_deleted","is_draft","show_in_account","send_email","send_telegram" from message_attributes WHERE message_id = %s ORDER BY id DESC LIMIT %s',
+            'select "id","date_create","publish_date","message_id","is_deleted","is_draft","show_in_account","send_email","send_telegram" from message_attributes WHERE message_id = %s ORDER BY id ASC LIMIT %s',
         )
 
     async def test_builder_build_update_with_relations(self):
         msg = Message(id=5, language="ru")
         msg_attr = MessageAttribute(id=5, show_in_account=True)
         msg.message_attributes_id = msg_attr
-        query, field_list = await msg.build_update_with_relations()
+        query = await msg.build_update_with_relations(id=msg.id, payload=msg)
         self.assertEqual(
-            query[0][0],
-            """\
-UPDATE message \
-SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s \
-WHERE id = %s""",
+            query[0][0][0],
+            """UPDATE message SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s WHERE id = %s""",
         )
+
         self.assertEqual(
-            query[1][0],
-            """\
-UPDATE message_attributes \
-SET show_in_account=%s \
-WHERE message_id = %s""",
+            query[0][1][0],
+            """UPDATE message_attributes SET show_in_account=%s WHERE message_id = %s""",
         )
 
     async def test_builder_build_create_with_relations(self):

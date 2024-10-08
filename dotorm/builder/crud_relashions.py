@@ -18,7 +18,6 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
         if not relation_fields:
             relation_fields = cls.get_relation_fields()
         else:
-            # проверка что поля действительно relaton, можно убрать
             relation_fields = [
                 (name, field)
                 for name, field in cls.get_relation_fields()
@@ -26,18 +25,13 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
             ]
 
         for name, field in relation_fields:
-            if isinstance(field, Field):
-                relation = field.relation or False
-                if not relation:
-                    continue
-                relation_table = field.relation_table
-                relation_table_field = field.relation_table_field
-            else:
-                continue
+            relation_table = field.relation_table
+            relation_table_field = field.relation_table_field
 
             if isinstance(field, Many2many):
                 field_name_list.append(name)
                 field_list.append(field)
+
                 request_list.append(
                     await cls.build_get_many2many(
                         id,
@@ -57,9 +51,6 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
                 field_name_list.append(name)
                 field_list.append(field)
                 request_list.append(
-                    # await cls.build_get_one2one(
-                    #     relation_table, relation_table_field, id
-                    # )
                     await relation_table.build_search(
                         filter={relation_table_field: id},
                         limit=1,
@@ -72,13 +63,12 @@ class BuilderCRUDRelashions(BuilderCRUD, BuilderMany2many):
 
         return request_list, field_name_list, field_list
 
-    async def build_update_with_relations(self, payload=None, fields=[]):
+    @classmethod
+    async def build_update_with_relations(cls, payload, id, fields=[]):
         request_list = []
         field_list = []
-        if not payload:
-            payload = self
         # Создание сущности в базе без связей
-        request_list.append(await self.build_update(payload, self.id, fields))
+        request_list.append(await cls.build_update(payload, id, fields))
 
         # TODO: обновление relations полей
         # get_relation_fields

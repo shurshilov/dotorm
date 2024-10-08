@@ -1,8 +1,8 @@
 import asyncio
 import datetime
 
-from dotorm.orm import DotModel
-from dotorm.fields import Boolean, Char, Integer, Many2many, One2many, One2one
+from .dotorm.orm import DotModel
+from .dotorm.fields import Boolean, Char, Integer, Many2many, One2many, One2one
 
 
 class MessageAttribute(DotModel):
@@ -98,12 +98,12 @@ async def main():
     print(query)
     query = await Message.build_get(5, ["id", "date"])
     print(query)
-    query = await msg.build_delete(msg.id)
+    query = await msg.build_delete()
     print(query)
     query = await Message.build_create(msg)
     print(query)
     msg_new = Message(id=5, language="en")
-    query = await msg.build_update(msg_new, msg_new.id)
+    query = await msg.build_update(payload=msg_new, id=msg_new.id)
     print(query)
     query = await Message.build_search(filter={"id": 5})
     print(query)
@@ -125,7 +125,7 @@ async def main():
     msg = Message(id=5, language="ru")
     msg_attr = MessageAttribute(id=5, show_in_account=True)
     msg.message_attributes_id = msg_attr
-    query = await msg.build_update_with_relations()
+    query = await msg.build_update_with_relations(id=msg.id, payload=msg)
     print(query)
 
     msg = Message(id=5, language="ru")

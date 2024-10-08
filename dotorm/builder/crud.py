@@ -8,15 +8,20 @@ class BuilderCRUD(Model):
     @classmethod
     async def build_get(cls, id, fields=[]):
         if not fields:
-            fields = cls.get_store_fields()
-
-        select_fields = ",".join(f'"{name}"' for name in fields)
-        stmt = f"SELECT {select_fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
+            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
+        else:
+            fields = ",".join(f'"{name}"' for name in fields)
+        stmt = f"SELECT {fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
         return stmt, [id]
 
-    async def build_delete(self, id):
-        stmt = f"DELETE FROM {self.__table__} WHERE id=%s"
-        return stmt, [id]
+    async def build_delete(self):
+        return f"DELETE FROM {self.__table__} WHERE id=%s"
+
+    @classmethod
+    async def build_delete_bulk(cls, len: int):
+        # # return f"DELETE FROM {cls.__table__} WHERE id = any($1::int[])"
+        args: str = ",".join(["%s"] * len)
+        return f"DELETE FROM {cls.__table__} WHERE id in ({args})"
 
     @classmethod
     async def build_create(cls, payload):
@@ -25,8 +30,9 @@ class BuilderCRUD(Model):
         stmt, values_list = build_sql_create_from_schema(stmt, payload)
         return stmt, values_list
 
-    async def build_update(self, payload, id, fields=[]):
-        stmt = f"UPDATE {self.__table__} SET %s WHERE id = %s"
+    @classmethod
+    async def build_update(cls, payload, id, fields=[]):
+        stmt = f"UPDATE {cls.__table__} SET %s WHERE id = %s"
         # TODO: создание relations полей
         stmt, values_list = build_sql_update_from_schema(stmt, payload, id, fields)
         return stmt, values_list
@@ -34,19 +40,20 @@ class BuilderCRUD(Model):
     @classmethod
     async def build_search(
         cls,
+        fields=None,
         start=None,
         end=None,
         limit=None,
-        order="DESC",
+        order="ASC",
         sort="id",
         filter: Any = None,
-        fields=[],
-        raw=None,
     ):
+        # if not fields:
+        # raise OrmConfigurationFieldException()
         if not fields:
-            fields = cls.get_store_fields()
-
-        select_fields = ",".join(f'"{name}"' for name in fields)
+            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
+        else:
+            fields = ",".join(f'"{name}"' for name in fields)
         where = ""
         where_values = ()
         if filter:
@@ -78,15 +85,20 @@ class BuilderCRUD(Model):
             if where_condition:
                 where = "WHERE " + " and ".join(where_condition)
 
-        # TODO: fix sql injection
-        stmt = f"select {select_fields} from {cls.__table__} {where} ORDER BY {sort} {order} "
+        stmt = f"select {fields} from {cls.__table__} {where} ORDER BY {sort} {order} "
 
         if end != None and start != None:
-            stmt += "LIMIT %s, %s"
-            val = (start, end - start)
+            stmt += "LIMIT %s OFFSET %s"
+            val = (end - start, start)
         elif limit:
             stmt += "LIMIT %s"
             val = (limit,)
+        # if end != None and start != None:
+        #     stmt += "LIMIT %s, %s"
+        #     val = (start, end - start)
+        # elif limit:
+        #     stmt += "LIMIT %s"
+        #     val = (limit,)
         else:
             val = tuple()
 

@@ -5,9 +5,16 @@ from .session import PostgresSessionWithTransactionSingleConnection
 
 
 class TransactionPostgresDotORM:
-    def __init__(self, pool: asyncpg.Pool):
+    # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
+    default_pool: asyncpg.Pool | None = None
+
+    def __init__(self, pool: asyncpg.Pool | None = None):
         self.session_factory = PostgresSessionWithTransactionSingleConnection
-        self.pool = pool
+        if pool is None:
+            assert self.default_pool is not None
+            self.pool = self.default_pool
+        else:
+            self.pool = pool
 
     async def __aenter__(self):
         connection: asyncpg.Connection = await self.pool.acquire()
