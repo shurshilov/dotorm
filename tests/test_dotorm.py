@@ -23,10 +23,10 @@ class MessageAttribute(DotModel):
 class User(DotModel):
     __table__ = "user"
 
-    id: int = Integer(primary_key=True)
-    clientid: int | None = Integer(default=None)
     name: str = Char(max_length=255)
     email: str = Char(max_length=255)
+    id: int = Integer(primary_key=True)
+    clientid: int | None = Integer(default=None)
     languageid: str | None = Char(default=None, max_length=255)
     agree_to_get_notifications: str | None = Char(default=None, max_length=255)
     event_type_id: str | None = Char(default=None, max_length=255)
@@ -46,22 +46,22 @@ class Message(DotModel):
     __table__ = "message"
     __route__ = "/notifications"
 
-    date = Datetime(default=None)
-    subject = Char(default="", max_length=255)
-    publish = Boolean(default=False)
-    id = Integer(primary_key=True)
-    template_id = Integer(default=None)
-    chain_id = Integer(default=None)
-    language = Char(default=None, max_length=255)
-    body_json = Char(default="{}", max_length=255)
-    body = Char(default="", max_length=255)
-    body_telegram_json = Char(default="{}", max_length=255)
-    body_telegram = Char(default="", max_length=255)
+    id: int = Integer(primary_key=True)
+    date: datetime.datetime = Datetime(default=None)
+    subject: str = Char(default="", max_length=255)
+    publish: bool = Boolean(default=False)
+    template_id: int = Integer(default=None)
+    chain_id: int = Integer(default=None)
+    language: str = Char(default=None, max_length=255)
+    body_json: str = Char(default="{}", max_length=255)
+    body: str = Char(default="", max_length=255)
+    body_telegram_json: str = Char(default="{}", max_length=255)
+    body_telegram: str = Char(default="", max_length=255)
 
-    clientid = Integer(store=False, default=None)
-    show_in_account = Boolean(store=False, default=None)
-    send_email = Boolean(store=False, default=None)
-    send_telegram = Boolean(store=False, default=None)
+    clientid: int = Integer(store=False, default=None)
+    show_in_account: bool = Boolean(store=False, default=None)
+    send_email: bool = Boolean(store=False, default=None)
+    send_telegram: bool = Boolean(store=False, default=None)
 
     users_ids = Many2many[User](
         store=False,
