@@ -1,8 +1,8 @@
-from ..model import Model
+from ..model import JsonMode, Model
 
 
 def build_sql_update_from_schema(
-    sql: str, payload: Model, id=None, fields=[], exclude=set()
+    sql: str, payload: Model, id=int | list, fields=[], exclude=set()
 ) -> tuple[str, list]:
     """Составляет запрос создания (insert).
     Исключает поля primary_key (id), relation_fields, non-stored fields
@@ -23,14 +23,19 @@ def build_sql_update_from_schema(
         payload_no_relation = payload.json(
             exclude=payload.get_none_update_fields_set().union(exclude),
             exclude_none=True,
+            exclude_unset=True,
             only_store=True,
         )
     fields_list, values_list = zip(*payload_no_relation.items())
-    if id:
+    if isinstance(id, list):
+        values_list += tuple(id)
+        where_placeholder = ", ".join(["%s"] * len(id))
+    else:
         values_list += (id,)
+        where_placeholder = "%s"
 
     query_placeholders = ", ".join([field + "=%s" for field in fields_list])
-    sql = sql % (query_placeholders, "%s" if id else "")
+    sql = sql % (query_placeholders, where_placeholder)
     return sql, values_list
 
 
@@ -50,13 +55,15 @@ def build_sql_create_from_schema(
     """
     if fields:
         payload_no_relation = payload.json(
-            include=fields, exclude_none=True, only_store=True
+            include=fields, exclude_none=True, only_store=True, mode=JsonMode.CREATE
         )
     else:
         payload_no_relation = payload.json(
             exclude=payload.get_none_update_fields_set(),
             exclude_none=True,
+            # exclude_unset=True,
             only_store=True,
+            mode=JsonMode.CREATE,
         )
 
     fields_list, values_list = zip(*payload_no_relation.items())

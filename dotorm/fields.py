@@ -53,6 +53,8 @@ class Field[FieldType]:
     ondelete: str = "set null"
     relation: bool = False
     relation_table_field: str | None = None
+    # наверное перенести в класс relation
+    _relation_table: "DotModel | None" = None
 
     def __init__(self, **kwargs: Any) -> None:
         self.indexable = kwargs.pop("indexable", False)
@@ -139,9 +141,15 @@ class Field[FieldType]:
         return not self.null
 
     @property
-    def relation_table(self):
-        if callable(self._relation_table):
+    def relation_table(self) -> "DotModel | None":
+        # если модель задана через лямюда функцию
+        if (
+            self._relation_table
+            and not isinstance(self._relation_table, type)
+            and callable(self._relation_table)
+        ):
             return self._relation_table()
+        # если модель задана классом
         return self._relation_table
 
     @relation_table.setter
@@ -356,8 +364,9 @@ class Many2one[T: "DotModel"](Field[T]):
     field_type = Type
     sql_type = "INTEGER"
     relation = True
+    relation_table: "DotModel"
 
-    def __init__(self, relation_table: Type, **kwargs: Any) -> None:
+    def __init__(self, relation_table: T, **kwargs: Any) -> None:
         self._relation_table = relation_table
         super().__init__(**kwargs)
 
@@ -370,6 +379,8 @@ class Many2many[T: "DotModel"](Field[list[T]]):
     field_type = list[Type]
     store = False
     relation = True
+    relation_table: "DotModel"
+    many2many_table: str
 
     def __init__(
         self,
@@ -394,6 +405,8 @@ class One2many[T: "DotModel"](Field[list[T]]):
     field_type = list[Type]
     store = False
     relation = True
+    relation_table: "DotModel"
+    relation_table_field: str
 
     def __init__(
         self,
@@ -414,6 +427,7 @@ class One2one[T: "DotModel"](Field[T]):
     field_type = Type
     store = False
     relation = True
+    relation_table: "DotModel"
 
     def __init__(
         self,

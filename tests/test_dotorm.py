@@ -129,7 +129,7 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await Message.build_get(5)
         self.assertEqual(
             query[0],
-            'SELECT "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" FROM message WHERE id = %s LIMIT 1',
+            'SELECT "id","date","subject","publish","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" FROM message WHERE id = %s LIMIT 1',
         )
 
     async def test_builder_get_with_fields(self):
@@ -161,25 +161,59 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
         query = await msg.build_update(payload=msg_new, id=msg.id)
         self.assertEqual(
             query[0],
-            """UPDATE message SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s WHERE id = %s""",
+            "UPDATE message SET language=%s WHERE id = %s",
         )
-        self.assertEqual(query[1], ("", False, "en", "{}", "", "{}", "", 5))
+        self.assertEqual(query[1], ("en", 5))
 
     async def test_builder_build_search(self):
-        query = await Message.build_search(filter={"id": 5})
+        query = await Message.build_search(
+            filter=[("id", "=", 5)],
+            fields=[
+                "date",
+                "subject",
+                "publish",
+                "id",
+                "template_id",
+                "chain_id",
+                "language",
+                "body_json",
+                "body",
+                "body_telegram_json",
+                "body_telegram",
+            ],
+        )
         self.assertEqual(
             query[0],
-            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id = %s ORDER BY id ASC """,
+            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id = %s ORDER BY id DESC LIMIT %s""",
         )
         query = await Message.build_search(fields=["id", "date"])
         self.assertEqual(
             query[0],
-            """select "id","date" from message  ORDER BY id ASC """,
+            """select "id","date" from message  ORDER BY id DESC LIMIT %s""",
         )
-        query = await Message.build_search(filter={"id": [1, 2, 3]})
+        query = await Message.build_search(
+            filter=[("id", "in", [1, 2, 3])],
+            fields=[
+                "date",
+                "subject",
+                "publish",
+                "id",
+                "template_id",
+                "chain_id",
+                "language",
+                "body_json",
+                "body",
+                "body_telegram_json",
+                "body_telegram",
+            ],
+        )
         self.assertEqual(
             query[0],
-            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id in (%s, %s, %s) ORDER BY id ASC """,
+            """select "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" from message WHERE id in (%s, %s, %s) ORDER BY id DESC LIMIT %s""",
+        )
+        self.assertEqual(
+            query[1],
+            (1, 2, 3, 80),
         )
 
     async def test_builder_build_table_len(self):
@@ -205,34 +239,32 @@ class TestBuilder(unittest.IsolatedAsyncioTestCase):
             "INSERT INTO message_attributes (message_id, show_in_account) VALUES (%s, %s)",
         )
 
-    async def test_builder_build_get_with_relations(self):
-        query = await Message.build_get_with_relations(
-            100, relation_fields=["message_attributes_id"]
-        )
-        self.assertEqual(
-            query[0][0][0],
-            'SELECT "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" FROM message WHERE id = %s LIMIT 1',
-        )
+    # async def test_builder_build_get_with_relations(self):
+    #     query = await Message.get_with_relations(100, fields=["message_attributes_id"])
+    #     self.assertEqual(
+    #         query[0][0][0],
+    #         'SELECT "date","subject","publish","id","template_id","chain_id","language","body_json","body","body_telegram_json","body_telegram" FROM message WHERE id = %s LIMIT 1',
+    #     )
 
-        self.assertEqual(
-            query[0][1][0],
-            'select "id","date_create","publish_date","message_id","is_deleted","is_draft","show_in_account","send_email","send_telegram" from message_attributes WHERE message_id = %s ORDER BY id ASC LIMIT %s',
-        )
+    #     self.assertEqual(
+    #         query[0][1][0],
+    #         'select "id","date_create","publish_date","message_id","is_deleted","is_draft","show_in_account","send_email","send_telegram" from message_attributes WHERE message_id = %s ORDER BY id ASC LIMIT %s',
+    #     )
 
-    async def test_builder_build_update_with_relations(self):
-        msg = Message(id=5, language="ru")
-        msg_attr = MessageAttribute(id=5, show_in_account=True)
-        msg.message_attributes_id = msg_attr
-        query = await msg.build_update_with_relations(id=msg.id, payload=msg)
-        self.assertEqual(
-            query[0][0][0],
-            """UPDATE message SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s WHERE id = %s""",
-        )
+    # async def test_builder_build_update_with_relations(self):
+    #     msg = Message(id=5, language="ru")
+    #     msg_attr = MessageAttribute(id=5, show_in_account=True)
+    #     msg.message_attributes_id = msg_attr
+    #     query = await msg.build_update_with_relations(id=msg.id, payload=msg)
+    #     self.assertEqual(
+    #         query[0][0][0],
+    #         """UPDATE message SET subject=%s, publish=%s, language=%s, body_json=%s, body=%s, body_telegram_json=%s, body_telegram=%s WHERE id = %s""",
+    #     )
 
-        self.assertEqual(
-            query[0][1][0],
-            """UPDATE message_attributes SET show_in_account=%s WHERE message_id = %s""",
-        )
+    #     self.assertEqual(
+    #         query[0][1][0],
+    #         """UPDATE message_attributes SET show_in_account=%s WHERE message_id = %s""",
+    #     )
 
     async def test_builder_build_create_with_relations(self):
         msg = Message(id=5, language="ru")

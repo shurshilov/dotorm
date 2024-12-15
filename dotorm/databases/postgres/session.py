@@ -60,12 +60,17 @@ class PostgresSessionWithTransactionSingleConnection(SessionAbstract):
 class PostgresSessionWithPool(SessionAbstract):
     "Этот класс берет соединение из пулла и выполняет запросв нем."
 
-    def __init__(self, pool: asyncpg.Pool) -> None:
-        self.pool = pool
+    # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
+    default_pool: asyncpg.Pool | None = None
 
-    async def execute(
-        self, stmt: str, val=None, func_prepare=None, func_cur="fetchall"
-    ):
+    def __init__(self, pool: asyncpg.Pool | None = None) -> None:
+        if pool is None:
+            assert self.default_pool is not None
+            self.pool = self.default_pool
+        else:
+            self.pool = pool
+
+    async def execute(self, stmt: str, val=None, func_prepare=None, func_cur="fetch"):
         async with self.pool.acquire() as conn:
             # Заменить %s на $1...$n dollar-numberic
             counter = 1
@@ -80,12 +85,18 @@ class PostgresSessionWithPool(SessionAbstract):
                 else:
                     rows = await conn.execute(stmt)
             else:
+                # TODO: удалить явную поддержку posgres
+                if func_cur == "fetchall":
+                    func_cur = "fetch"
                 if val:
-                    rows = await conn.fetch(stmt, *val)
+                    rows = await getattr(conn, func_cur)(stmt, *val)
+                    # rows = await conn.fetch(stmt, *val)
                 else:
-                    rows = await conn.fetch(stmt)
-                for rec in rows:
-                    rows_dict.append(dict(rec))
+                    rows = await getattr(conn, func_cur)(stmt)
+                    # rows = await conn.fetch(stmt)
+                if rows:
+                    for rec in rows:
+                        rows_dict.append(dict(rec))
 
             if func_prepare and rows_dict:
                 return func_prepare(rows_dict)

@@ -12,7 +12,7 @@ class BuilderOne2one(Model):
         self, relation_table: "DotModel", relation_table_field, id, fields=[]
     ):
         stmt, values_list = await relation_table.build_search(
-            filter={relation_table_field: id}, limit=1
+            filter=[(relation_table_field, "=", id)], limit=1
         )
         return stmt, values_list
 
