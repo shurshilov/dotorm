@@ -3,23 +3,30 @@ import asyncio
 import asyncpg
 import time
 
-from ..types import PostgresPoolSettings
+from .transaction import ContainerTransaction
+from ...orm.model import DotModel
+from .session import NoTransactionNoPoolSession
+from ..abstract.types import ContainerSettings, PostgresPoolSettings
+
 
 log = logging.getLogger("dotorm")
 
 
-class PostgresPool:
-    def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super().__new__(cls)
-        return cls.instance
+class ContainerPostgres:
+    def __init__(
+        self,
+        pool_settings: PostgresPoolSettings,
+        container_settings: ContainerSettings,
+    ):
+        self.pool_settings = pool_settings
+        self.container_settings = container_settings
 
     # РАБОТА С ПУЛОМ
-    async def connect(self, settings: PostgresPoolSettings):
+    async def create_pool(self):
         try:
             start_time: float = time.time()
             pool = await asyncpg.create_pool(
-                **settings,
+                **self.pool_settings.model_dump(),
                 min_size=5,
                 max_size=15,
                 command_timeout=60,
@@ -29,15 +36,15 @@ class PostgresPool:
             )
             # assert isinstance(pool, asyncpg.Pool)
             assert pool is not None
-            self.pool_auto_commit = pool
+            self.pool = pool
             start_time: float = time.time()
 
             log.debug(
                 "Connection PostgreSQL db: %s, created time: [%0.3fs]",
-                settings["database"],
+                self.pool_settings.database,
                 time.time() - start_time,
             )
-            return self.pool_auto_commit
+            return self.pool
         except (
             ConnectionError,
             TimeoutError,
@@ -47,12 +54,37 @@ class PostgresPool:
             log.exception(
                 "Postgres create poll connection lost, reconnect after 10 seconds: "
             )
-            await asyncio.sleep(10)
-            await self.connect(settings)
+            await asyncio.sleep(self.container_settings.reconnect_timeout)
+            await self.create_pool()
         except Exception as e:
             # если ошибка не связанна с сетью, завершаем выполнение программы
             log.exception("Postgres create pool error:")
             raise e
 
+    async def create_database(self):
+        """Создание БД
+        pool_settings["database"] = "template1"
+        pool_settings["user"] = "postgres"
+        f'CREATE DATABASE "{db_config.database}" OWNER "{db_config.user}"'
+        """
+        db_to_create = self.pool_settings.database
+        self.pool_settings.database = "postgres"
+        conn = await NoTransactionNoPoolSession.get_connection(self.pool_settings)
+        sql = f'CREATE DATABASE "{db_to_create}"'
+        await conn.execute(sql)
+        await conn.close()
 
-pg_pool = PostgresPool()
+    async def create_and_update_tables(self, models: list[type[DotModel]]):
+        "Синхронизация таблиц в БД"
+        stmt_foreign_keys = []
+
+        async with ContainerTransaction(self.pool) as session:
+            # создаем модели в БД, без FK
+            for model in models:
+                foreign_keys = await model.__create_table__(session)
+                stmt_foreign_keys += foreign_keys
+
+            # создаем внешние ключи, для ссылочной целостности
+            # на поля many2one а также на колонки полей many2many
+            for stmt_foreign_key in stmt_foreign_keys:
+                await session.execute(stmt_foreign_key)

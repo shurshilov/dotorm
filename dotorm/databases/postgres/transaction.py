@@ -1,15 +1,15 @@
 import asyncpg
 from asyncpg.transaction import Transaction
 
-from .session import PostgresSessionWithTransactionSingleConnection
+from .session import TransactionSession
 
 
-class TransactionPostgresDotORM:
+class ContainerTransaction:
     # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
     default_pool: asyncpg.Pool | None = None
 
     def __init__(self, pool: asyncpg.Pool | None = None):
-        self.session_factory = PostgresSessionWithTransactionSingleConnection
+        self.session_factory = TransactionSession
         if pool is None:
             assert self.default_pool is not None
             self.pool = self.default_pool

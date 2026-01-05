@@ -1,20 +1,26 @@
 import asynch
 
+from ..abstract.session import SessionAbstract
 
-from ..sesson_abstract import SessionAbstract
+
+class ClickhouseSession(SessionAbstract): ...
 
 
-class ClickhouseSessionWithPool(SessionAbstract):
-    "Этот класс берет соединение из пулла и выполняет запросв нем."
+class ClickhouseSessionWithPool(ClickhouseSession):
+    "Этот класс берет соединение из пулла и выполняет запрос в нем."
 
-    def __init__(self, pool: asynch.pool.Pool) -> None:
+    def __init__(self, pool: asynch.Pool):
         self.pool = pool
 
-    async def execute(
-        self, stmt: str, val=None, func_prepare=None, func_cur="fetchall"
-    ):
+    async def execute(self, stmt: str, val=None, func_prepare=None):
+        """
+        Простая реализация сессии в кликхаусе.
+        Выполнение запроса, и возврат соединения в пул.
+        """
+
         async with self.pool.acquire() as conn:
             async with conn.cursor() as cursor:
+                assert isinstance(cursor, asynch.Cursor)
                 if val:
                     await cursor.execute(stmt, val)
                 else:

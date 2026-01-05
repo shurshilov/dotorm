@@ -1,10 +1,12 @@
 import aiomysql
 
+from ..abstract.session import SessionAbstract
 
-from ..sesson_abstract import SessionAbstract
+
+class MysqlSession(SessionAbstract): ...
 
 
-class MysqlSessionWithPoolTransaction(SessionAbstract):
+class TransactionSession(MysqlSession):
     """тот класс работает в одном соединении не закрывая его.
     Пока его не закроют явно. Используется при работе в транзакции.
     Паттерн unit of work."""
@@ -37,11 +39,18 @@ class MysqlSessionWithPoolTransaction(SessionAbstract):
         return rows
 
 
-class MysqlSessionWithPool(SessionAbstract):
+class NoTransactionSession(MysqlSession):
     "Этот класс берет соединение из пулла и выполняет запросв нем."
 
-    def __init__(self, pool: aiomysql.Pool) -> None:
-        self.pool = pool
+    # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
+    default_pool: aiomysql.Pool | None = None
+
+    def __init__(self, pool: aiomysql.Pool | None = None) -> None:
+        if pool is None:
+            assert self.default_pool is not None
+            self.pool = self.default_pool
+        else:
+            self.pool = pool
 
     async def execute(
         self, stmt: str, val=None, func_prepare=None, func_cur="fetchall"

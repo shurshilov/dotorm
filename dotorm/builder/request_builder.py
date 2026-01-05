@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Any, Callable, Literal
 from ..fields import Field, Many2many, Many2one, One2many
 
@@ -17,11 +18,15 @@ operator = Literal[
     "in",
     "not in",
 ]
+
+
 FilterTriplet = tuple[str, operator, Any]
 # @dataclass
-# class FilterTriplet:
+# class FilterTriplet[Model]:
+#     # allowed_fields = list(self.Model.get_fields())
+#     # (list[Literal[*allowed_fields]], ...)
 #     name: str
-#     operator: str
+#     operator: operator
 #     value: Any
 
 
@@ -45,6 +50,9 @@ class RequestBuilder:
     def function_prepare(self) -> Callable:
         if isinstance(self.field, (Many2many, One2many, Many2one)):
             return self.field.relation_table.prepare_list_ids
+        # TODO: помоему тут ошибка relation_table всегда будет пустое
+        # а реквест билдер всеравно не используется в не связей
+        # и else никогда не вызывается
         else:
             return self.field.relation_table.prepare_list_id
 
@@ -61,6 +69,6 @@ class RequestBuilderForm(RequestBuilder):
         else:
             return self.field.relation_table.prepare_form_id
 
-    @function_prepare.setter
-    def function_prepare(self, function_prepare):
-        self._function_prepare = function_prepare
+    # @function_prepare.setter
+    # def function_prepare(self, function_prepare):
+    #     self._function_prepare = function_prepare

@@ -3,25 +3,29 @@ import asyncio
 import logging
 import time
 
-from ..types import MysqlPoolSettings
-
-log = logging.getLogger("dotorm")
+from ..abstract.types import ContainerSettings, MysqlPoolSettings
 
 
-class MysqlPool:
-    def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super().__new__(cls)
-        return cls.instance
+log = logging.getLogger(__package__)
+
+
+class ContainerMysql:
+    def __init__(
+        self,
+        pool_settings: MysqlPoolSettings,
+        container_settings: ContainerSettings,
+    ):
+        self.pool_settings = pool_settings
+        self.container_settings = container_settings
 
     # РАБОТА С ПУЛОМ
-    async def mysql_connect(self, settings: MysqlPoolSettings):
+    async def create_pool(self):
         try:
             start_time: float = time.time()
             self.pool: aiomysql.Pool = await aiomysql.create_pool(
-                **settings,
+                **self.pool_settings.model_dump(),
                 minsize=5,
-                # maxsize=15,
+                maxsize=15,
                 autocommit=True,
                 # 15 minutes
                 pool_recycle=60 * 15,
@@ -29,7 +33,7 @@ class MysqlPool:
             start_time: float = time.time()
             log.debug(
                 "Connection MySQL db: %s, created time: [%0.3fs]",
-                settings["db"],
+                self.pool_settings.db,
                 time.time() - start_time,
             )
             return self.pool
@@ -38,12 +42,9 @@ class MysqlPool:
             log.exception(
                 "Mysql create poll connection lost, reconnect after 10 seconds: "
             )
-            await asyncio.sleep(10)
-            await self.mysql_connect(settings)
+            await asyncio.sleep(self.container_settings.reconnect_timeout)
+            await self.create_pool()
         except Exception as e:
             # если ошибка не связанна с сетью, завершаем выполнение программы
             log.exception("Mysql create poll error:")
             raise e
-
-
-mysql_pool = MysqlPool()

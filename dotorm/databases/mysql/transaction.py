@@ -1,16 +1,16 @@
 import aiomysql
 
-from .session import MysqlSessionWithPoolTransaction
+from .session import TransactionSession
 
 
-class TransactionMysqlDotORM:
+class ContainerTransaction:
     def __init__(self, pool: aiomysql.Pool):
         self.pool = pool
 
     async def __aenter__(self):
         connection: aiomysql.Connection = await self.pool._acquire()
         cursor: aiomysql.Cursor = await connection.cursor(aiomysql.DictCursor)
-        self.session = MysqlSessionWithPoolTransaction(connection, cursor)
+        self.session = TransactionSession(connection, cursor)
 
         return self.session
 

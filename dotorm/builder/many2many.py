@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Literal
 
 
 if TYPE_CHECKING:
-    from ..orm import DotModel
+    from ..orm.model import DotModel
 from ..model import Model
 
 
@@ -65,6 +65,11 @@ class BuilderMany2many(Model):
         fields: list[str] = [],
         limit: int = 80,
     ):
+        """
+        Оптимизированная версия, когда необходимо получить сразу несколько свзяей m2m
+        у нескольких записей. Не просто один список на одну записиь.
+        А N списков на N записей.
+        """
         if not fields:
             fields = relation_table.get_store_fields()
 

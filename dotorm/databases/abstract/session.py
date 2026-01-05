@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import Any
 
 
 class SessionAbstract(ABC):
@@ -10,4 +9,4 @@ class SessionAbstract(ABC):
         val=None,
         func_prepare=None,
         func_cur="fetch",
-    ) -> Any: ...
+    ): ...

@@ -1,25 +1,30 @@
-import logging
-import asyncio
 import asynch
+import asyncio
+import logging
 import time
 
-from ..types import ClickhousePoolSettings
+from backend.base.databases.abstract.types import (
+    ClickhousePoolSettings,
+    ContainerSettings,
+)
 
-log = logging.getLogger("dotorm")
+log = logging.getLogger(__package__)
 
 
-class ClickhousePool:
-    def __new__(cls):
-        if not hasattr(cls, "instance"):
-            cls.instance = super().__new__(cls)
-        return cls.instance
+class ContainerClickhouse:
+    def __init__(
+        self,
+        pool_settings: ClickhousePoolSettings,
+        container_settings: ContainerSettings,
+    ):
+        self.pool_settings = pool_settings
+        self.container_settings = container_settings
 
-    # РАБОТА С ПУЛОМ
-    async def connect(self, settings: ClickhousePoolSettings):
+    async def create_pool(self):
         try:
             start_time: float = time.time()
             pool = await asynch.create_pool(
-                **settings,
+                **self.pool_settings.model_dump(),
                 min_size=5,
                 max_size=15,
                 # command_timeout=60,
@@ -27,28 +32,25 @@ class ClickhousePool:
                 # max_inactive_connection_lifetime
                 # pool_recycle=60 * 15,
             )
-            # assert isinstance(pool, asyncpg.Pool)
+            assert isinstance(pool, asynch.Pool)
             assert pool is not None
             self.pool = pool
             start_time: float = time.time()
 
             log.debug(
                 "Connection Clickhouse db: %s, created time: [%0.3fs]",
-                settings["database"],
+                self.pool_settings.database,
                 time.time() - start_time,
             )
             return self.pool
-        except (ConnectionError, TimeoutError) as e:
+        except (ConnectionError, TimeoutError):
             # Если не смогли подключиться к базе пробуем переподключиться
             log.exception(
                 "Clickhouse create poll connection lost, reconnect after 10 seconds: "
             )
-            await asyncio.sleep(10)
-            await self.connect(settings)
+            await asyncio.sleep(self.container_settings.reconnect_timeout)
+            await self.create_pool()
         except Exception as e:
             # если ошибка не связанна с сетью, завершаем выполнение программы
             log.exception("Clickhouse create pool error:")
             raise e
-
-
-clickhouse_pool = ClickhousePool()

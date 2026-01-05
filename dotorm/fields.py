@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Type
 
 if TYPE_CHECKING:
-    from .orm import DotModel
+    from .orm.model import DotModel
 
 
 log = logging.getLogger("dotorm")
@@ -42,6 +42,7 @@ class Field[FieldType]:
     sql_type: str
     indexable: bool = False
     store: bool = True
+    string: str = ""
 
     index: bool = False
     primary_key: bool = False
@@ -72,7 +73,7 @@ class Field[FieldType]:
         self.validation()
 
     # обман тайп чекера.
-    # TODO: В идеале, сделать так чтобы тип поля менялся если это обьект и если это класс.
+    # TODO: В идеале, сделать так чтобы тип поля менялся если это инстанс или если это класс.
     # 1. Возможно это необходимо сделать в классе скорей всего модели
     # 2. Или перейти на pep-0593 (Integer = Annotated[int, Integer(primary_key=True)])
     # но тогда в классе не будет типа Field и мы получим такую же ситуаци но в классе
@@ -142,7 +143,7 @@ class Field[FieldType]:
 
     @property
     def relation_table(self) -> "DotModel | None":
-        # если модель задана через лямюда функцию
+        # если модель задана через лямбда функцию
         if (
             self._relation_table
             and not isinstance(self._relation_table, type)
@@ -236,7 +237,10 @@ class Char(Field[str]):
         return f"VARCHAR({self.max_length})"
 
 
-class Text(Field[str]):  # type: ignore
+class Selection(Char): ...
+
+
+class Text(Field[str]):
     """
     Large Text field.
     """
@@ -288,7 +292,7 @@ class Decimal(Field[PythonDecimal]):
         super().__init__(**kwargs)
 
     @property
-    def sql_type(self) -> str:  # type: ignore
+    def sql_type(self) -> str:
         return f"DECIMAL({self.max_digits},{self.decimal_places})"
 
 

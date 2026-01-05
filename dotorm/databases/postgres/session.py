@@ -1,11 +1,18 @@
-import asyncpg
-from asyncpg.transaction import Transaction
-
-from ..types import PostgresPoolSettings
-from ..sesson_abstract import SessionAbstract
+from ..abstract.types import PostgresPoolSettings
+from ..abstract.session import SessionAbstract
 
 
-class PostgresSessionWithTransactionSingleConnection(SessionAbstract):
+try:
+    import asyncpg
+    from asyncpg.transaction import Transaction
+except:
+    ...
+
+
+class PostgresSession(SessionAbstract): ...
+
+
+class TransactionSession(PostgresSession):
     """Этот класс работает в одном соединении не закрывая его.
     Пока его не закроют явно. Используется при работе в транзакции.
     Паттерн unit of work."""
@@ -57,7 +64,7 @@ class PostgresSessionWithTransactionSingleConnection(SessionAbstract):
         return rows
 
 
-class PostgresSessionWithPool(SessionAbstract):
+class NoTransactionSession(PostgresSession):
     "Этот класс берет соединение из пулла и выполняет запросв нем."
 
     # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
@@ -103,7 +110,7 @@ class PostgresSessionWithPool(SessionAbstract):
             return rows_dict or rows
 
 
-class PostgresSessionWithoutTransaction(SessionAbstract):
+class NoTransactionNoPoolSession(PostgresSession):
     """Этот класс открывает одиночное соединение (не используя пулл)
     и после выполнения сразу закрывает его."""
 
@@ -132,6 +139,6 @@ class PostgresSessionWithoutTransaction(SessionAbstract):
 
     @classmethod
     async def get_connection(cls, settings: PostgresPoolSettings):
-        conn: asyncpg.Connection = await asyncpg.connect(**settings)
+        conn: asyncpg.Connection = await asyncpg.connect(**settings.model_dump())
         assert isinstance(conn, asyncpg.Connection)
         return conn

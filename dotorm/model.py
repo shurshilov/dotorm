@@ -1,13 +1,14 @@
 from abc import ABCMeta
 from enum import IntEnum
-import aiomysql
-import asyncpg
-from typing import Any, ClassVar, Type, dataclass_transform
+from typing import TYPE_CHECKING, Any, ClassVar, Type, Union, dataclass_transform
 
-from .databases.mysql.session import MysqlSessionWithPool
+if TYPE_CHECKING:
+    import aiomysql
+    import asyncpg
 
-from .databases.postgres.session import PostgresSessionWithPool
 
+from .databases.mysql.session import NoTransactionSession
+from .databases.postgres.session import NoTransactionSession
 from .fields import Field, Many2many, Many2one, One2many, One2one
 
 
@@ -41,11 +42,11 @@ class Model(metaclass=ModelMetaclass):
     __database__: ClassVar[str]
     # pool of connections to database
     # use for default usage in orm (without explicit set)
-    _pool: ClassVar[aiomysql.Pool | asyncpg.Pool]
+    _pool: ClassVar[Union["aiomysql.Pool", "asyncpg.Pool"]]
     # class that implement no transaction execute
     # single connection -> execute -> release connection to pool
     # use for default usage in orm (without explicit set)
-    _no_transaction: ClassVar[Type[PostgresSessionWithPool | MysqlSessionWithPool]]
+    _no_transaction: ClassVar[Type[NoTransactionSession | NoTransactionSession]]
     # base validation schema for routers endpoints
     __schema__: ClassVar[Type]
     # variables for override auto created - update and create schemas
@@ -169,14 +170,8 @@ class Model(metaclass=ModelMetaclass):
         return {
             attr_name: attr
             for attr_name, attr in cls.__dict__.items()
-            # if not callable(v) and not k.startswith("_")
             if isinstance(attr, Field)
         }
-        # return {
-        #     # cls.__dict__[field_name]
-        #     field_name: getattr(cls, field_name)
-        #     for field_name, annotation in cls.__annotations__.items()
-        # }
 
     @classmethod
     def get_relation_fields(cls):
@@ -187,20 +182,20 @@ class Model(metaclass=ModelMetaclass):
 
     @classmethod
     def get_relation_fields_m2m(cls):
-        """Только те поля, которые имеют связи. Ассоциации."""
+        """Только те поля, которые имеют связи многие ко многим."""
         return {
             name: field
             for name, field in cls.get_fields().items()
-            if field.relation and isinstance(field, Many2many)
+            if isinstance(field, Many2many)
         }
 
     @classmethod
     def get_relation_fields_m2m_o2m(cls):
-        """Только те поля, которые имеют связи. Ассоциации."""
+        """Только те поля, которые имеют связи многие ко многим или один ко многим."""
         return [
             (name, field)
             for name, field in cls.get_fields().items()
-            if field.relation and isinstance(field, (Many2many, One2many))
+            if isinstance(field, (Many2many, One2many))
         ]
 
     @classmethod
@@ -221,19 +216,27 @@ class Model(metaclass=ModelMetaclass):
     def get_default_values(
         cls, fields_client_nested: dict[str, list[str]]
     ) -> dict[str, Field]:
-        """Возвращает поля с установленным значением по умолчанию.
-        Используется при создании записи на фронтенде, например
+        """
+        fields_client_nested - словарь вложенных полей для полей m2m и o2m
+
+        Возвращает поля с установленным значением по умолчанию.
+        Используется при создании записи(сущности) на фронтенде. Например
         мы создаем пользователя поле active у которого по умолчанию True.
         """
         default_values = {}
         for name, field in cls.get_fields().items():
+
             if field.default != None:
                 default_values.update({name: field.default})
+
             elif isinstance(field, (One2many, Many2many)):
-                if name in fields_client_nested:
-                    fields_client = fields_client_nested[name]
+                # значение по умолчанию для m2m и o2m
+                # если с клиента передан список вложенных полей,
+                # то установить значение по умолчанию
+                fields_nested = fields_client_nested.get(name)
+                if fields_nested:
                     fields_info = field.relation_table.get_fields_info_list(
-                        fields_client
+                        fields_nested
                     )
                     x2m_default = {
                         "data": [],
@@ -241,12 +244,8 @@ class Model(metaclass=ModelMetaclass):
                         "total": 0,
                     }
                     default_values.update({name: x2m_default})
+
         return default_values
-        # return {
-        #     name: field.default
-        #     for name, field in cls.get_fields().items()
-        #     if field.default != None
-        # }
 
     @classmethod
     def get_none_update_fields_set(cls) -> set[str]:
@@ -266,37 +265,26 @@ class Model(metaclass=ModelMetaclass):
             or (field.relation and not isinstance(field, Many2one))
         }
 
-    # def get_store_fields_json(self):
-    #     """Возвращает только те поля, которые хранятся в БД.
-    #     Для экземпляра класса. В экземпляре поля (класс Field)
-    #     преобразуются в реальные данные например Integer -> int"""
-    #     store_fields = {}
-    #     for field_name, annotation in self.get_store_fields_dict().items():
-    #         field = getattr(self, field_name)
-    #         if isinstance(field, Field):
-    #             store_fields[field_name] = field.default
-    #         elif isinstance(field, Model):
-    #             store_fields[field_name] = field.id
-    #             # store_fields[field_name] = {"id": field.id}
-    #         elif isinstance(field, list):
-    #             store_fields[field_name] = [rec.id for rec in field]
-    #         else:
-    #             store_fields[field_name] = field
-    #     return store_fields
-
     @classmethod
     def get_fields_info_list(cls, fields_list: list[str]):
-        return [
-            {
-                "name": name,
-                "type": field.__class__.__name__,
-                "relation": (
-                    field.relation_table.__table__ if field.relation_table else ""
-                ),
-            }
-            for name, field in cls.get_fields().items()
-            if name in fields_list
-        ]
+        fields_info = []
+        for name, field in cls.get_fields().items():
+            if name in fields_list:
+                if field.relation:
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "relation": (
+                                field.relation_table.__table__
+                                if field.relation_table
+                                else ""
+                            ),
+                        }
+                    )
+                else:
+                    fields_info.append({"name": name, "type": field.__class__.__name__})
+        return fields_info
 
     @classmethod
     def get_fields_info_form(cls, fields_list: list[str]):
@@ -313,11 +301,7 @@ class Model(metaclass=ModelMetaclass):
                                 if field.relation_table
                                 else ""
                             ),
-                            "relatedField": (
-                                field.relation_table_field
-                                if field.relation_table_field
-                                else ""
-                            ),
+                            "relatedField": (field.relation_table_field or ""),
                         }
                     )
                 else:
@@ -329,27 +313,33 @@ class Model(metaclass=ModelMetaclass):
         Для экземпляра класса. В экземпляре поля (класс Field)
         преобразуются в реальные данные например Integer -> int"""
         fields_json = {}
+        # fields - это поля описанные в модели (классе)
         if only_store:
             fields = self.get_store_fields_dict().items()
         else:
             fields = self.get_fields().items()
 
         for field_name, field_class in fields:
+            # field - это поле из экземпляра.
+            # 1. оно может содержать данные, если задано.
+            # 2. оно может содержать класс Field, если не задано.
             field = getattr(self, field_name)
 
             # НЕ ЗАДАНО
             # если поле экземпляра класса, осталось классом Field
             # это значит что оно не было считано из БД
             if isinstance(field, Field):
-                # если установлен флаг исключить не заланные то ничего не делаем
+                # если установлен флаг исключить не заданные,
+                # то ничего не делать
                 if not exclude_unset:
+                    # иначе взять значение по умолчанию или None
                     if not field.default is None:
                         fields_json[field_name] = field.default
                     else:
                         fields_json[field_name] = None
 
-            # ЗАДАНО как many2one или one2one
-            # если поле является моделью то...
+            # ЗАДАНО как many2one
+            # если поле является моделью то это many2one
             elif isinstance(field, Model):
                 if mode == JsonMode.LIST:
                     # обрубаем, исключаем все релейшен поля

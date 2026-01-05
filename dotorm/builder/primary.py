@@ -1,6 +1,6 @@
 from typing import Literal
 
-from .utils import FilterTriplet
+from .request_builder import FilterTriplet
 from ..model import JsonMode, Model
 from .helpers import (
     build_sql_create_from_schema,
@@ -8,15 +8,7 @@ from .helpers import (
 )
 
 
-class BuilderCRUD(Model):
-    @classmethod
-    async def build_get(cls, id, fields=[]):
-        if not fields:
-            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
-        else:
-            fields = ",".join(f'"{name}"' for name in fields)
-        stmt = f"SELECT {fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
-        return stmt, [id]
+class BuilderCRUDPrimary(Model):
 
     async def build_delete(self):
         return f"DELETE FROM {self.__table__} WHERE id=%s"
@@ -78,6 +70,16 @@ class BuilderCRUD(Model):
         stmt, values_list = build_sql_update_from_schema(stmt, payload, ids)
         return stmt, values_list
 
+    @classmethod
+    async def build_get(cls, id, fields=[]):
+        if not fields:
+            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
+        else:
+            fields = ",".join(f'"{name}"' for name in fields)
+        stmt = f"SELECT {fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
+        return stmt, [id]
+
+    # build_get_bulk analog
     @classmethod
     async def build_search(
         cls,
