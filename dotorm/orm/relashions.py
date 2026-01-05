@@ -1,9 +1,23 @@
 import asyncio
 from typing import Any, Literal, Self
 
+from .primary import OrmPrimary
+
+
 from .many2many import OrmMany2many
-from ..builder.request_builder import RequestBuilderForm, FilterTriplet
-from ..fields import Many2many, Many2one, One2many
+from ..builder.request_builder import (
+    FilterExpression,
+    RequestBuilderForm,
+    FilterTriplet,
+)
+from ..fields import (
+    AttachmentMany2one,
+    AttachmentOne2many,
+    Many2many,
+    Many2one,
+    One2many,
+    One2one,
+)
 
 
 class OrmRelashions(OrmMany2many):
@@ -16,14 +30,17 @@ class OrmRelashions(OrmMany2many):
         limit: int = 1000,
         order: Literal["DESC", "ASC", "desc", "asc"] = "DESC",
         sort: str = "id",
-        filter: list[FilterTriplet] | None = None,
+        filter: FilterExpression | None = None,
         raw: bool = False,
         session=None,
     ) -> list[Self]:
         if session is None:
             session = cls._get_db_session()
+        dialect = "postgres"
+        if not cls._is_postgres:
+            dialect = "mysql"
         stmt, values = await cls.build_search(
-            fields, start, end, limit, order, sort, filter
+            fields, start, end, limit, order, sort, filter, dialect=dialect
         )
         func_prepare = cls.prepare_list_ids if not raw else None
         func_cur = "fetchall"
@@ -34,29 +51,41 @@ class OrmRelashions(OrmMany2many):
 
         # если есть хоть одна запись и вообще нужно читать поля связей
         fields_relation = [
-            (name, field) for name, field in cls.get_relation_fields() if name in fields
+            (name, field)
+            for name, field in cls.get_relation_fields()
+            if name in fields
         ]
         if records and fields_relation:
-            await cls._records_list_get_relation(session, fields_relation, records)
+            await cls._records_list_get_relation(
+                session, fields_relation, records
+            )
 
         return records
 
     @classmethod
-    async def get_with_relations(cls, id, fields=[], fields_info={}, session=None):
+    async def get_with_relations(
+        cls, id, fields=[], fields_info={}, session=None
+    ):
         """Выполняется ПАРАЛЛЕЛЬНО в нескольких соединениях, без транзакций"""
         # если нет сессии, взять сессию по умолчанию
         if session is None:
             session = cls._get_db_session()
 
+        dialect = "postgres"
+        if not cls._is_postgres:
+            dialect = "mysql"
+
         # защита, оставить только те поля, которые действительно хранятся в базе
-        fields_store = [name for name in cls.get_store_fields() if name in fields]
+        fields_store = [
+            name for name in cls.get_store_fields() if name in fields
+        ]
         # если вдруг они не заданы, или таких нет, взять все
         if not fields_store:
             fields_store = [name for name in cls.get_store_fields()]
         if "id" not in fields_store:
             fields_store.append("id")
 
-        stmt, values = await cls.build_get(id, fields_store)
+        stmt, values = await cls.build_get(id, fields_store, dialect=dialect)
         func_prepare = None
         func_cur = "fetchall"
 
@@ -88,13 +117,20 @@ class OrmRelashions(OrmMany2many):
                     fields = ["id"]
                     if relation_table.get_fields().get("name"):
                         fields.append("name")
+                    if isinstance(field, AttachmentMany2one):
+                        fields = relation_table.get_store_fields_omit_m2o()
                 else:
                     fields = fields_nested
 
-                if isinstance(field, Many2one) and relation_table:
+                if (
+                    isinstance(field, (Many2one, AttachmentMany2one))
+                    and relation_table
+                ):
                     # взять ид из поля many2one и запросить запись из связанной таблицы
                     m2o_id = getattr(record, name)
-                    stmt, val = await relation_table.build_get(m2o_id, fields=fields)
+                    stmt, val = await relation_table.build_get(
+                        m2o_id, fields=fields, dialect=dialect
+                    )
 
                     req = RequestBuilderForm(
                         stmt=stmt,
@@ -168,6 +204,52 @@ class OrmRelashions(OrmMany2many):
                     )
                     request_list.append(req)
 
+                if isinstance(field, AttachmentOne2many) and relation_table:
+                    params = {
+                        "start": 0,
+                        "end": 40,
+                        "limit": 40,
+                        "fields": relation_table.get_store_fields_omit_m2o(),
+                        # "filter": [(relation_table_field, "=", record.id)],
+                        "filter": [
+                            ("res_id", "=", record.id),
+                            ("res_model", "=", record.__table__),
+                        ],
+                    }
+                    execute_list.append(relation_table.search(**params))
+                    params["fields"] = ["id"]
+                    params["start"] = None
+                    params["end"] = None
+                    params["limit"] = 1000
+                    execute_list.append(relation_table.search(**params))
+                    req = RequestBuilderForm(
+                        stmt=None,
+                        value=None,
+                        field_name=name,
+                        field=field,
+                        fields=relation_table.get_store_fields_omit_m2o(),
+                    )
+                    request_list.append(req)
+
+                if isinstance(field, One2one) and relation_table:
+                    params = {
+                        # "start": 0,
+                        # "end": 1,
+                        "limit": 1,
+                        "fields": fields,
+                        "filter": [(relation_table_field, "=", record.id)],
+                    }
+                    execute_list.append(relation_table.search(**params))
+
+                    req = RequestBuilderForm(
+                        stmt=None,
+                        value=None,
+                        field_name=name,
+                        field=field,
+                        fields=fields,
+                    )
+                    request_list.append(req)
+
             # если один из запросов с ошибкой сразу прекратить выполнение и выкинуть ошибку
             results = await asyncio.gather(*execute_list)
 
@@ -176,18 +258,23 @@ class OrmRelashions(OrmMany2many):
             i = 0
             for request_builder in request_list:
                 result = results[i]
-                if isinstance(request_builder.field, Many2one):
+                if isinstance(
+                    request_builder.field,
+                    (Many2one, AttachmentMany2one, One2one),
+                ):
                     # m2o нужно распаковать так как он тоже в списке
                     # если пустой список, то установить None
                     result = result[0] if result else None
-                if isinstance(request_builder.field, (Many2many, One2many)):
+                    # result = result if result else None
+                if isinstance(
+                    request_builder.field,
+                    (Many2many, One2many, AttachmentOne2many),
+                ):
                     # если m2m или o2m необзодимо взять два результатата
                     # так как один из них это число всех строк таблицы
                     # для пагинации
-                    fields_info = (
-                        request_builder.field.relation_table.get_fields_info_list(
-                            request_builder.fields
-                        )
+                    fields_info = request_builder.field.relation_table.get_fields_info_list(
+                        request_builder.fields
                     )
                     result = {
                         "data": result,
@@ -200,20 +287,56 @@ class OrmRelashions(OrmMany2many):
 
         return record
 
-    async def update_with_relations(self, payload: Self, fields=[], session=None):
+    async def update_with_relations(
+        self, payload: Self, fields=[], session=None
+    ):
         """Выполняется ПОСЛЕДОВАТЕЛЬНО в одном соединении"""
         if session is None:
             session = self._get_db_session()
 
+        fields_attachments = [
+            (name, field)
+            for name, field in self.get_relation_fields_attachment()
+            if name in fields
+        ]
+
+        if fields_attachments:
+            for name, field in fields_attachments:
+                if isinstance(field, AttachmentMany2one):
+                    field_obj = getattr(payload, name)
+                    if field_obj and field.relation_table:
+                        # TODO: всегда создавать новую строку аттачмент с файлом
+                        # также надо продумать механизм обновления уже существующего файла
+                        # надо ли? или проще удалять
+                        field_obj["res_id"] = self.id
+                        attachment_id = await field.relation_table.create(
+                            field_obj, session
+                        )
+                        setattr(payload, name, attachment_id)
+                        # await self.update(payload, [name], session)
+                    # record_raw = await self.update(payload, fields, session)
+                # if isinstance(field, AttachmentOne2many):
+                #     field_obj = getattr(payload, name)
+                #     if field_obj and field.relation_table:
+                #         for file in field_obj:
+                #             field_obj["res_id"] = self.id
+                #             attachment_id = await field.relation_table.create(
+                #                 field_obj, session
+                #             )
+                #         setattr(payload, name, attachment_id)
+
         # защита, оставить только те поля, которые действительно хранятся в базе
-        fields_store = [name for name in self.get_store_fields() if name in fields]
+        fields_store = [
+            name for name in self.get_store_fields() if name in fields
+        ]
         # Обновление сущности в базе без связей
         if fields_store:
+            record_raw = await self.update(payload, fields, session)
             # fields_store = [name for name in self.get_store_fields()]
-            stmt, values = await self.build_update(payload, self.id, fields_store)
-            func_prepare = None
-            func_cur = "fetchall"
-            record_raw = await session.execute(stmt, values, func_prepare, func_cur)
+            # stmt, values = await self.build_update(payload, self.id, fields_store)
+            # func_prepare = None
+            # func_cur = "fetchall"
+            # record_raw = await session.execute(stmt, values, func_prepare, func_cur)
 
         # защита, оставить только те поля, которые являются отношениями (m2m, o2m)
         # добавлена информаци о вложенных полях
@@ -229,25 +352,43 @@ class OrmRelashions(OrmMany2many):
             field_list = []
             for name, field in fields_relation:
                 field_obj = getattr(payload, name)
-                if isinstance(field, One2many):
+                if isinstance(field, (One2one)):
+                    params = {
+                        "limit": 1,
+                        "fields": ["id"],
+                        "filter": [(field.relation_table_field, "=", self.id)],
+                    }
+                    record = await field.relation_table.search(**params)
+                    if len(record):
+                        request_list.append(record[0].update(field_obj))
+
+                if isinstance(field, (One2many, AttachmentOne2many)):
                     field_list.append(field)
                     # заменить в связанных полях виртуальный ид на вновь созданный
                     for obj in field_obj["created"]:
                         for k, v in obj.items():
                             f = getattr(field.relation_table, k)
-                            if isinstance(f, Many2one) and v == "VirtualId":
+                            if (
+                                isinstance(f, (Many2one, AttachmentMany2one))
+                                and v == "VirtualId"
+                            ):
                                 obj[k] = self.id
 
                     data_created = [
                         field.relation_table(**obj) for obj in field_obj["created"]  # type: ignore
                     ]
+                    if isinstance(field, AttachmentOne2many):
+                        for obj in data_created:
+                            obj.res_id = self.id
                     if field_obj["created"]:
                         request_list.append(
                             field.relation_table.create_bulk(data_created)
                         )
                     if field_obj["deleted"]:
                         request_list.append(
-                            field.relation_table.delete_bulk(field_obj["deleted"])
+                            field.relation_table.delete_bulk(
+                                field_obj["deleted"]
+                            )
                         )
 
                 if isinstance(field, Many2many):
@@ -256,7 +397,10 @@ class OrmRelashions(OrmMany2many):
                     for obj in field_obj["created"]:
                         for k, v in obj.items():
                             f = getattr(field.relation_table, k)
-                            if isinstance(f, Many2one) and v == "VirtualId":
+                            if (
+                                isinstance(f, (Many2one, AttachmentMany2one))
+                                and v == "VirtualId"
+                            ):
                                 obj[k] = self.id
                     data_created = [
                         field.relation_table(**obj) for obj in field_obj["created"]  # type: ignore
@@ -268,13 +412,21 @@ class OrmRelashions(OrmMany2many):
                         # здесь надо добавить результат создания
                         if "selected" not in field_obj:
                             field_obj["selected"] = []
-                        field_obj["selected"] += [rec["id"] for rec in created_ids]
+                        field_obj["selected"] += [
+                            rec["id"] for rec in created_ids
+                        ]
                     if field_obj.get("selected"):
-                        data_selected = [(self.id, id) for id in field_obj["selected"]]
-                        request_list.append(self.link_many2many(field, data_selected))
+                        data_selected = [
+                            (self.id, id) for id in field_obj["selected"]
+                        ]
+                        request_list.append(
+                            self.link_many2many(field, data_selected)
+                        )
                     if field_obj.get("unselected"):
                         request_list.append(
-                            self.unlink_many2many(field, field_obj["unselected"])
+                            self.unlink_many2many(
+                                field, field_obj["unselected"]
+                            )
                         )
 
             # 1 conn

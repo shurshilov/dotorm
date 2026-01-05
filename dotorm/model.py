@@ -1,21 +1,58 @@
 from abc import ABCMeta
+import asyncio
 from enum import IntEnum
-from typing import TYPE_CHECKING, Any, ClassVar, Type, Union, dataclass_transform
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    ClassVar,
+    Type,
+    TypeAlias,
+    Union,
+    dataclass_transform,
+)
 
 if TYPE_CHECKING:
     import aiomysql
     import asyncpg
 
 
-from .databases.mysql.session import NoTransactionSession
-from .databases.postgres.session import NoTransactionSession
-from .fields import Field, Many2many, Many2one, One2many, One2one
+from .databases.mysql.session import (
+    NoTransactionSession as MysqlNoTransactionSession,
+)
+from .databases.postgres.session import (
+    NoTransactionSession as PostgresNoTransactionSession,
+)
+from .fields import (
+    AttachmentOne2many,
+    Field,
+    Many2many,
+    Many2one,
+    One2many,
+    One2one,
+    AttachmentMany2one,
+)
 
 
 class JsonMode(IntEnum):
     FORM = 1
     LIST = 2
     CREATE = 3
+
+
+def depends(*field_names: str) -> Callable[[Callable], Callable]:
+    """
+    Декоратор для вычисляемых полей.
+    Указывает, от каких полей зависит вычисление.
+    Поддерживает вложенные зависимости.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        func.compute_deps = set(field_names)
+        return func
+
+    return decorator
 
 
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
@@ -38,7 +75,7 @@ class Model(metaclass=ModelMetaclass):
     __route__: ClassVar[str]
     # create CRUD endpoints automaticaly or not
     __auto_crud__: ClassVar[bool] = False
-    # name databse
+    # name database
     __database__: ClassVar[str]
     # pool of connections to database
     # use for default usage in orm (without explicit set)
@@ -46,9 +83,12 @@ class Model(metaclass=ModelMetaclass):
     # class that implement no transaction execute
     # single connection -> execute -> release connection to pool
     # use for default usage in orm (without explicit set)
-    _no_transaction: ClassVar[Type[NoTransactionSession | NoTransactionSession]]
+    _no_transaction: ClassVar[
+        Type[MysqlNoTransactionSession | PostgresNoTransactionSession]
+    ]
     # base validation schema for routers endpoints
-    __schema__: ClassVar[Type]
+    # __schema__: ClassVar[Type]
+    __schema__: ClassVar[Annotated]
     # variables for override auto created - update and create schemas
     __schema_create__: ClassVar[Type]
     __schema_read_output__: ClassVar[Type]
@@ -61,6 +101,22 @@ class Model(metaclass=ModelMetaclass):
 
     # id required field in any model
     id: ClassVar[int]
+
+    def __init_subclass__(cls, **kwargs):
+        """
+        1.Срабатывает один раз при определении подкласса,а не при каждом создании экземпляра
+        2.Позволяет устанавливать значения на уровне класса, а не объекта
+        3.__init_subclass__ — это правильный и "официальный"
+        способ кастомизировать поведение наследования
+        """
+        # не забудем super на случай MRO
+        super().__init_subclass__(**kwargs)
+        # if not hasattr(cls, "__route__"):
+        # Здесь мы проверяем не hasattr, а __dict__,
+        # чтобы не словить унаследованный __route__
+        if "__table__" in cls.__dict__ and "__route__" not in cls.__dict__:
+            # установить имя роута такой же как имя модели по умолчанию
+            cls.__route__ = "/" + cls.__table__
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         # for attr in dir(Message):
@@ -82,6 +138,57 @@ class Model(metaclass=ModelMetaclass):
         for name, value in kwargs.items():
             setattr(self, name, value)
 
+        # если поле вычисляемое и не хранящееся в БД то вычислить его
+        for name, field in self.get_fields().items():
+            if field.compute and not field.store:
+                setattr(self, name, field.compute(self))
+
+    #             # Если есть функция вычисления (имя метода)
+    #             if isinstance(field.compute, str):
+    #                 # Проверяем, существует ли метод
+    #                 method_name = field.compute
+    #                 if hasattr(self, method_name):
+    #                     # Вычисляем значение сразу
+    #                     method = getattr(self, method_name)
+    #                     if hasattr(method, "compute_deps"):
+    #                         # Для методов с зависимостями - не вычисляем сразу
+    #                         # а оставляем как не вычисленное
+    #                         pass
+    #                     else:
+    #                         # Вычисляем значение
+    #                         setattr(self, name, method())
+    #                 else:
+    #                     raise AttributeError(
+    #                         f"Method '{method_name}' not found for field '{name}'"
+    #                     )
+
+    # def __setattr__(self, name: str, value: Any) -> None:
+    #     """Переопределяем для отслеживания изменений"""
+    #     # Если это поле модели и оно изменилось
+    #     if name in self.get_fields():
+    #         field = self.get_fields()[name]
+    #         if field.store:  # Только если поле хранится в БД
+    #             # Инвалидируем зависимые поля
+    #             self._invalidate_dependent_fields(name)
+    #     super().__setattr__(name, value)
+
+    # def _invalidate_dependent_fields(self, changed_field: str):
+    #     """Инвалидировать все зависимые поля"""
+    #     # Проходим по всем полям модели
+    #     for field_name, field in self.get_fields().items():
+    #         # Если это вычисляемое поле с зависимостями
+    #         if field.compute and not field.store:
+    #             method_name = field.compute
+    #             if isinstance(method_name, str) and hasattr(self, method_name):
+    #                 method = getattr(self, method_name)
+    #                 # Проверяем, есть ли зависимости
+    #                 if hasattr(method, "compute_deps"):
+    #                     deps = method.compute_deps
+    #                     if changed_field in deps:
+    #                         # Устанавливаем флаг, что поле нужно пересчитать
+    #                         # Вместо удаления атрибута - устанавливаем флаг
+    #                         setattr(self, f"_{field_name}_computed", False)
+
     @classmethod
     def _get_db_session(cls):
         return cls._no_transaction(cls._pool)  # type: ignore
@@ -97,8 +204,10 @@ class Model(metaclass=ModelMetaclass):
     def prepare_form_id(cls, r: list):
         """Десериализация из словаря в обьект.
         Используется при получении данных из БД"""
-        if len(r) != 1:
-            raise
+        if not r:
+            return None
+        if len(r) > 1:
+            raise Exception("Количество записей в форме больше 1")
 
         record = cls(**r[0])
         # record_fields = cls(**r[0]).json(exclude_unset=True, mode=JsonMode.FORM)
@@ -174,10 +283,21 @@ class Model(metaclass=ModelMetaclass):
         }
 
     @classmethod
+    def get_compute_fields(cls):
+        """Только те поля, которые имеют связи. Ассоциации."""
+        return [
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if field.compute
+        ]
+
+    @classmethod
     def get_relation_fields(cls):
         """Только те поля, которые имеют связи. Ассоциации."""
         return [
-            (name, field) for name, field in cls.get_fields().items() if field.relation
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if field.relation
         ]
 
     @classmethod
@@ -195,7 +315,18 @@ class Model(metaclass=ModelMetaclass):
         return [
             (name, field)
             for name, field in cls.get_fields().items()
-            if isinstance(field, (Many2many, One2many))
+            if isinstance(
+                field, (Many2many, One2many, AttachmentOne2many, One2one)
+            )
+        ]
+
+    @classmethod
+    def get_relation_fields_attachment(cls):
+        """Только те поля, которые имеют связи m2o для вложений."""
+        return [
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if isinstance(field, (AttachmentMany2one, AttachmentOne2many))
         ]
 
     @classmethod
@@ -204,16 +335,36 @@ class Model(metaclass=ModelMetaclass):
         Поля, у которых store = False, не хранятся в бд.
         По умолчанию все поля store = True, кроме One2many и Many2many
         """
-        return [name for name, field in cls.get_fields().items() if field.store]
+        return [
+            name for name, field in cls.get_fields().items() if field.store
+        ]
+
+    @classmethod
+    def get_store_fields_omit_m2o(cls) -> list[str]:
+        """Возвращает только те поля, которые хранятся в БД.
+        Поля, у которых store = False, не хранятся в бд.
+        По умолчанию все поля store = True, кроме One2many и Many2many.
+        Исключает m2o поля.
+        Используется при чтении связанного поля, для остановки вложенности.
+        """
+        return [
+            name
+            for name, field in cls.get_fields().items()
+            if field.store and not isinstance(field, Many2one)
+        ]
 
     @classmethod
     def get_store_fields_dict(cls) -> dict[str, Field]:
         """Возвращает только те поля, которые хранятся в БД.
         Результат в виде dict"""
-        return {name: field for name, field in cls.get_fields().items() if field.store}
+        return {
+            name: field
+            for name, field in cls.get_fields().items()
+            if field.store
+        }
 
     @classmethod
-    def get_default_values(
+    async def get_default_values(
         cls, fields_client_nested: dict[str, list[str]]
     ) -> dict[str, Field]:
         """
@@ -227,7 +378,16 @@ class Model(metaclass=ModelMetaclass):
         for name, field in cls.get_fields().items():
 
             if field.default != None:
-                default_values.update({name: field.default})
+                if callable(field.default):
+                    # если корутина то сделать авейт
+                    if asyncio.iscoroutinefunction(field.default):
+                        res = await field.default()
+                        default_values.update({name: res})
+                    # иначе просто вызов
+                    else:
+                        default_values.update({name: field.default()})
+                else:
+                    default_values.update({name: field.default})
 
             elif isinstance(field, (One2many, Many2many)):
                 # значение по умолчанию для m2m и o2m
@@ -283,7 +443,13 @@ class Model(metaclass=ModelMetaclass):
                         }
                     )
                 else:
-                    fields_info.append({"name": name, "type": field.__class__.__name__})
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "options": field.options or [],
+                        }
+                    )
         return fields_info
 
     @classmethod
@@ -305,10 +471,18 @@ class Model(metaclass=ModelMetaclass):
                         }
                     )
                 else:
-                    fields_info.append({"name": name, "type": field.__class__.__name__})
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "options": field.options or [],
+                        }
+                    )
         return fields_info
 
-    def get_json(self, exclude_unset=False, only_store=None, mode=JsonMode.LIST):
+    def get_json(
+        self, exclude_unset=False, only_store=None, mode=JsonMode.LIST
+    ):
         """Возвращает все поля модели.
         Для экземпляра класса. В экземпляре поля (класс Field)
         преобразуются в реальные данные например Integer -> int"""
@@ -353,7 +527,9 @@ class Model(metaclass=ModelMetaclass):
                     fields_json[field_name] = field.id
 
             # ЗАДАНО как many2many или one2many
-            elif isinstance(field_class, (Many2many, One2many)):
+            elif isinstance(
+                field_class, (Many2many, One2many, AttachmentOne2many)
+            ):
                 if mode == JsonMode.LIST:
                     fields_json[field_name] = [
                         {

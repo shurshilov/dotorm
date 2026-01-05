@@ -65,7 +65,8 @@ class TransactionSession(PostgresSession):
 
 
 class NoTransactionSession(PostgresSession):
-    "Этот класс берет соединение из пулла и выполняет запросв нем."
+    """Этот класс берет соединение из пулла и выполняет запросв нем.
+    после этого возвращает соединение в пулл."""
 
     # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
     default_pool: asyncpg.Pool | None = None
@@ -112,7 +113,8 @@ class NoTransactionSession(PostgresSession):
 
 class NoTransactionNoPoolSession(PostgresSession):
     """Этот класс открывает одиночное соединение (не используя пулл)
-    и после выполнения сразу закрывает его."""
+    и после выполнения сразу закрывает его.
+    Используется например при создании базы данных."""
 
     @classmethod
     async def execute(

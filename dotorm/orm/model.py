@@ -1,49 +1,52 @@
-from typing import Self
+import datetime
+from typing import ClassVar, Self
 import typing
 from .relashions import OrmRelashions
 from .primary import OrmPrimary
-from ..fields import Field, Many2many, Many2one
+from ..fields import AttachmentMany2one, Field, Many2many, Many2one
 
 
-class DotModel(OrmPrimary, OrmRelashions):
+class DotModel(OrmRelashions):
     """Этот класс описывает содержит набор методов
     которые возвращают данные из БД, предварительно обратившись к билдеру,
     который собирает запрос.
     """
 
-    # _CACHE_DATA: ClassVar[dict] = {}
-    # _CACHE_LAST_TIME: ClassVar[dict] = {}
+    _CACHE_DATA: ClassVar[dict] = {}
+    _CACHE_LAST_TIME: ClassVar[dict] = {}
 
-    # @staticmethod
-    # def cache(name, ttl=30):
-    #     """Реализация простого кеша на TTL секунд, таблиц которые редко меняются,
-    #     и делать запрос в БД не целесообразно каждый раз, можно сохранить результат.
-    #     При использовании более одного воркера необходимо использовать redis.
+    @staticmethod
+    def cache(name, ttl=30):
+        """Реализация простого кеша на TTL секунд, таблиц которые редко меняются,
+        и делать запрос в БД не целесообразно каждый раз, можно сохранить результат.
+        При использовании более одного воркера необходимо использовать redis.
 
-    #     Arguments:
-    #         name -- name cache store data
-    #         ttl -- seconds cache store
-    #     """
+        Arguments:
+            name -- name cache store data
+            ttl -- seconds cache store
+        """
 
-    #     def decorator(func):
-    #         async def wrapper(self, *args):
-    #             # если данные есть в кеше
-    #             if self._CACHE_DATA.get(name):
-    #                 time_diff = datetime.datetime.now() - self._CACHE_LAST_TIME[name]
-    #                 # проверить актуальные ли они
-    #                 if time_diff.seconds < ttl:
-    #                     # если актуальные вернуть их
-    #                     return self._CACHE_DATA[name]
+        def decorator(func):
+            async def wrapper(self, *args):
+                # если данные есть в кеше
+                if self._CACHE_DATA.get(name):
+                    time_diff = (
+                        datetime.datetime.now() - self._CACHE_LAST_TIME[name]
+                    )
+                    # проверить актуальные ли они
+                    if time_diff.seconds < ttl:
+                        # если актуальные вернуть их
+                        return self._CACHE_DATA[name]
 
-    #             # если данных нет или они не актуальные сделать запрос в БД и запомнить
-    #             self._CACHE_DATA[name] = await func(self, *args)
-    #             # также сохранить дату и время запроса, для последующей проверки
-    #             self._CACHE_LAST_TIME[name] = datetime.datetime.now()
-    #             return self._CACHE_DATA[name]
+                # если данных нет или они не актуальные сделать запрос в БД и запомнить
+                self._CACHE_DATA[name] = await func(self, *args)
+                # также сохранить дату и время запроса, для последующей проверки
+                self._CACHE_LAST_TIME[name] = datetime.datetime.now()
+                return self._CACHE_DATA[name]
 
-    #         return wrapper
+            return wrapper
 
-    #     return decorator
+        return decorator
 
     # async def __getattr__(self, name):
     #     field = getattr(self, name)
@@ -152,6 +155,42 @@ class DotModel(OrmPrimary, OrmRelashions):
     #     """Создает новые поля, если таблица уже создана в базе данных,
     #     но после этого добавили новые поля"""
 
+    @staticmethod
+    def format_default_value(value):
+        """
+        PostgreSQL не поддерживает параметры в DDL, см. официальную документацию:
+        Prepared statements are supported only for DML commands
+        (SELECT, INSERT, UPDATE, DELETE), not for DDL like CREATE TABLE.
+        Поэтому вынуждены делать подстановку вручную в DDL —
+        но делать это нужно аккуратно и безопасно.
+        """
+        if isinstance(value, bool):
+            return "TRUE" if value else "FALSE"
+
+        elif isinstance(value, int):
+            return str(value)  # int, long
+
+        elif isinstance(value, float):
+            # Строгий контроль, чтобы исключить NaN и Inf (они могут вызвать ошибки в SQL)
+            if not (value == value and abs(value) != float("inf")):
+                raise ValueError("Invalid float for DEFAULT value")
+            return str(value)
+
+        elif isinstance(value, str):
+            # Явно запрещаем строки с опасными SQL символами
+            if ";" in value or "--" in value:
+                raise ValueError(
+                    "Potentially unsafe characters in default string"
+                )
+            # SQL-экранирование одинарных кавычек
+            escaped = value.replace("'", "''")
+            return f"'{escaped}'"
+
+        else:
+            raise TypeError(
+                f"Unsupported type for SQL DEFAULT: {type(value).__name__}"
+            )
+
     @classmethod
     async def __create_table__(cls, session=None):
         """Метод для создания таблицы в базе данных, основанной на атрибутах класса."""
@@ -169,10 +208,14 @@ class DotModel(OrmPrimary, OrmRelashions):
         # Проходимся по атрибутам класса и извлекаем информацию о полях.
         for field_name, field in cls.get_fields().items():
             if isinstance(field, Field):
-                if (field.store and not field.relation) or isinstance(field, Many2one):
+                if (field.store and not field.relation) or isinstance(
+                    field, (Many2one, AttachmentMany2one)
+                ):
                     # Создаём строку с определением поля и добавляем её в список custom_fields.
                     field_declaration = [f'"{field_name}" {field.sql_type}']
 
+                    # SERIAL уже подразумевает NOT NULL, а PRIMARY KEY включает в себя UNIQUE.
+                    # Поэтому достаточно просто id SERIAL PRIMARY KEY.
                     if field.unique:
                         field_declaration.append("UNIQUE")
                     if not field.null:
@@ -181,7 +224,9 @@ class DotModel(OrmPrimary, OrmRelashions):
                         field_declaration.append("PRIMARY KEY")
                     if field.default is not None:
                         if isinstance(field.default, (bool, int, str)):
-                            field_declaration.append(f"DEFAULT {field.default}")
+                            field_declaration.append(
+                                f"DEFAULT {cls.format_default_value(field.default)}"
+                            )
 
                     if isinstance(field, Many2one):
                         # не забыть создать FK для many2one

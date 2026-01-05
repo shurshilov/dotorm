@@ -18,6 +18,7 @@ class BuilderCRUDRelashions(BuilderMany2many):
         # sort="id",
         # filter: Any = None,
         records: list = [],
+        dialect="postgres",
     ):
         request_list: list[RequestBuilder] = []
         ids: list[int] = [record.id for record in records]
@@ -41,6 +42,7 @@ class BuilderCRUDRelashions(BuilderMany2many):
                 stmt, val = await field.relation_table.build_search(
                     fields=[*fields, field.relation_table_field],
                     filter=[(field.relation_table_field, "in", ids)],
+                    dialect=dialect,
                 )
                 req = RequestBuilder(
                     stmt=stmt, value=val, field_name=name, field=field, fields=fields
@@ -70,7 +72,7 @@ class BuilderCRUDRelashions(BuilderMany2many):
                 # могут ссылаться на одну сущность
                 ids_m2o = list(set(ids_m2o))
                 stmt, val = await field.relation_table.build_search(
-                    fields=fields, filter=[("id", "in", ids_m2o)]
+                    fields=fields, filter=[("id", "in", ids_m2o)], dialect=dialect
                 )
                 req = RequestBuilder(
                     stmt=stmt,

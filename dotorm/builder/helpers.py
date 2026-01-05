@@ -3,7 +3,7 @@ from ..model import JsonMode, Model
 
 def build_sql_update_from_schema(
     sql: str, payload: Model, id=int | list, fields=[], exclude=set()
-) -> tuple[str, list]:
+) -> tuple[str, tuple]:
     """Составляет запрос создания (insert).
     Исключает поля primary_key (id), relation_fields, non-stored fields
 
@@ -41,7 +41,7 @@ def build_sql_update_from_schema(
 
 def build_sql_create_from_schema(
     sql: str, payload: Model, fields=[]
-) -> tuple[str, list]:
+) -> tuple[str, tuple]:
     """Составляет запрос обновления (update).
     Исключает поля primary_key (id), relation_fields, non-stored fields
 
@@ -55,7 +55,10 @@ def build_sql_create_from_schema(
     """
     if fields:
         payload_no_relation = payload.json(
-            include=fields, exclude_none=True, only_store=True, mode=JsonMode.CREATE
+            include=fields,
+            exclude_none=True,
+            only_store=True,
+            mode=JsonMode.CREATE,
         )
     else:
         payload_no_relation = payload.json(

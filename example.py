@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 
-from .dotorm.orm import DotModel
+from .dotorm.orm.model import DotModel
 from .dotorm.fields import Boolean, Char, Integer, Many2many, One2many, One2one
 
 
@@ -26,8 +26,8 @@ class User(DotModel):
 
     id: int = Integer(primary_key=True)
     clientid: int | None = None
-    name: str = Char(max_length=255)
-    email: str = Char(max_length=255)
+    name: str = Char()
+    email: str = Char()
     languageid: str | None = None
     agree_to_get_notifications: str | None = None
     event_type_id: str | None = None
@@ -105,11 +105,11 @@ async def main():
     msg_new = Message(id=5, language="en")
     query = await msg.build_update(payload=msg_new, id=msg_new.id)
     print(query)
-    query = await Message.build_search(filter={"id": 5})
+    query = await Message.build_search(filter=[("id", "=", 5)])
     print(query)
-    query = await Message.build_search(fields="id,date")
+    query = await Message.build_search(fields=["id", "date"])
     print(query)
-    query = await Message.build_search(filter={"id": [1, 2, 3]})
+    query = await Message.build_search(filter=[("id", "in", [1, 2, 3])])
     print(query)
     query = await Message.build_table_len()
     print(query)
@@ -118,21 +118,21 @@ async def main():
     print(query)
     query = await msg_attr.build_create_one2one(fk_id=100, fk="message_id")
     print(query)
-    query = await Message.build_get_with_relations(
-        100, relation_fields=["message_attributes_id"]
-    )
-    print(query)
+    # query = await Message.build_get_with_relations(
+    #     100, fields_relation=["message_attributes_id"]
+    # )
+    # print(query)
     msg = Message(id=5, language="ru")
     msg_attr = MessageAttribute(id=5, show_in_account=True)
     msg.message_attributes_id = msg_attr
-    query = await msg.build_update_with_relations(id=msg.id, payload=msg)
-    print(query)
+    # query = await msg.build_update_with_relations(id=msg.id, payload=msg)
+    # print(query)
 
     msg = Message(id=5, language="ru")
     msg_attr = MessageAttribute(id=5, show_in_account=True)
     msg.message_attributes_id = msg_attr
-    query = await Message.build_create_with_relations(msg)
-    print(query)
+    # query = await Message.build_create_with_relations(msg)
+    # print(query)
 
 
 def test_answer():

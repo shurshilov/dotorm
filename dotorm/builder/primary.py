@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Any, Literal
 
-from .request_builder import FilterTriplet
+from .request_builder import FilterExpression
 from ..model import JsonMode, Model
 from .helpers import (
     build_sql_create_from_schema,
@@ -51,7 +51,9 @@ class BuilderCRUDPrimary(Model):
             ).keys()
         )
         query_columns = ", ".join(fields_list)
-        query_columns_returning = ", ".join([f"r.{field}" for field in fields_list])
+        query_columns_returning = ", ".join(
+            [f"r.{field}" for field in fields_list]
+        )
         # query_placeholders = ", ".join(["%s"] * len(values_list))
         # stmt = f"INSERT INTO {cls.__table__} ({query_columns}) VALUES ({query_placeholders})"
         stmt = f"INSERT INTO {cls.__table__} ({query_columns}) "
@@ -61,7 +63,9 @@ class BuilderCRUDPrimary(Model):
     async def build_update(cls, payload, id, fields=[]):
         stmt = f"UPDATE {cls.__table__} SET %s WHERE id = %s"
         # TODO: создание relations полей
-        stmt, values_list = build_sql_update_from_schema(stmt, payload, id, fields)
+        stmt, values_list = build_sql_update_from_schema(
+            stmt, payload, id, fields
+        )
         return stmt, values_list
 
     @classmethod
@@ -71,13 +75,143 @@ class BuilderCRUDPrimary(Model):
         return stmt, values_list
 
     @classmethod
-    async def build_get(cls, id, fields=[]):
-        if not fields:
-            fields = ",".join(f'"{name}"' for name in cls.get_store_fields())
+    async def build_get(cls, id, fields=[], dialect="postgres"):
+        if dialect == "postgres":
+            escape = '"'
         else:
-            fields = ",".join(f'"{name}"' for name in fields)
+            escape = "`"
+
+        if not fields:
+            fields = ",".join(
+                f"{escape}{name}{escape}" for name in cls.get_store_fields()
+            )
+        else:
+            fields = ",".join(f"{escape}{name}{escape}" for name in fields)
         stmt = f"SELECT {fields} FROM {cls.__table__} WHERE id = %s LIMIT 1"
         return stmt, [id]
+
+    @classmethod
+    def _parse_filter(
+        cls, filter_expr: FilterExpression, dialect: str = "postgres"
+    ) -> tuple[str, Any]:
+        if dialect == "postgres":
+            escape = '"'
+        else:
+            escape = "`"
+
+        def is_triplet(expr: Any) -> bool:
+            return (
+                isinstance(expr, (list, tuple))
+                and len(expr) == 3
+                and isinstance(expr[0], str)
+            )
+
+        # NOT выражение: ("not", expr)
+        if (
+            isinstance(filter_expr, (list, tuple))
+            and len(filter_expr) == 2
+            and filter_expr[0] == "not"
+        ):
+            inner_expr = filter_expr[1]
+            clause, values = cls._parse_filter(inner_expr, dialect)
+            return f"NOT ({clause})", values
+
+        # Обычный триплет
+        if is_triplet(filter_expr):
+            field, op, value = filter_expr
+            field = f"{escape}{field}{escape}"
+            op = op.lower()
+
+            if op in ("in", "not in"):
+                if not isinstance(value, (list, tuple)):
+                    raise ValueError(
+                        f"Operator '{op}' requires a list/tuple value"
+                    )
+                placeholders = ", ".join(["%s"] * len(value))
+                clause = f"{field} {op} ({placeholders})"
+                return clause, tuple(value)
+
+            elif op in (
+                "like",
+                "ilike",
+                "=like",
+                "=ilike",
+                "not like",
+                "not ilike",
+            ):
+                clause = f"{field} {op} %s"
+                return clause, ("%%" + value + "%%",)
+
+            elif op in ("=", "!=", ">", "<", ">=", "<="):
+                clause = f"{field} {op} %s"
+                return clause, (value,)
+
+            elif op == "is null":
+                return f"{field} IS NULL", ()
+
+            elif op == "is not null":
+                return f"{field} IS NOT NULL", ()
+
+            elif op in ("between", "not between"):
+                if not isinstance(value, (list, tuple)) or len(value) != 2:
+                    raise ValueError(
+                        f"Operator '{op}' requires a list of two values"
+                    )
+                clause = f"{field} {op.upper()} %s AND %s"
+                return clause, (value[0], value[1])
+
+            else:
+                raise ValueError(f"Unsupported operator: {op}")
+
+        # Вложенное логическое выражение: список с and/or и фильтрами
+        elif isinstance(filter_expr, list):
+            parts: list[tuple[str, str, bool]] = []
+            values: list[Any] = []
+
+            i = 0
+            while i < len(filter_expr):
+                item = filter_expr[i]
+
+                if isinstance(item, (list, tuple)):
+                    clause, clause_values = cls._parse_filter(item, dialect)
+                    wrap = not is_triplet(item)
+                    parts.append(("EXPR", clause, wrap))
+                    values.extend(clause_values)
+                    i += 1
+
+                elif isinstance(item, str) and item.lower() in ("and", "or"):
+                    parts.append(("OP", item.upper(), False))
+                    i += 1
+
+                else:
+                    raise ValueError(
+                        f"Invalid filter element at position {i}: {item}"
+                    )
+
+            # Авто-вставка AND, если операторы не указаны
+            normalized: list[tuple[str, str, bool]] = []
+            for idx, part in enumerate(parts):
+                if (
+                    idx > 0
+                    and part[0] == "EXPR"
+                    and parts[idx - 1][0] == "EXPR"
+                ):
+                    normalized.append(("OP", "AND", False))
+                normalized.append(part)
+
+            sql_parts: list[str] = []
+            first = True
+            for part in normalized:
+                kind, content, wrap = part
+                if kind == "EXPR":
+                    sql_parts.append(f"({content})" if wrap else content)
+                elif kind == "OP":
+                    sql_parts.append(content)
+
+            return " ".join(sql_parts), tuple(values)
+
+        else:
+            raise ValueError("Unsupported filter expression format")
 
     # build_get_bulk analog
     @classmethod
@@ -89,55 +223,31 @@ class BuilderCRUDPrimary(Model):
         limit: int = 80,
         order: Literal["DESC", "ASC", "desc", "asc"] = "DESC",
         sort: str = "id",
-        filter: list[FilterTriplet] | None = None,
+        filter: FilterExpression | None = None,
         raw: bool = False,
+        dialect="postgres",
     ):
-        # SEARCH STORE
-        # if not fields:
-        #     fields_store_stmt = ",".join(f'"{name}"' for name in cls.get_store_fields())
-        # else:
+        if dialect == "postgres":
+            escape = '"'
+        else:
+            escape = "`"
+
         fields_store_stmt = ",".join(
-            f'"{name}"' for name in fields if name in cls.get_store_fields()
+            f"{escape}{name}{escape}"
+            for name in fields
+            if name in cls.get_store_fields()
         )
+
         where = ""
         where_values = ()
-        where_condition = []
+
         if filter:
-            # TODO: поддержка операций для связей
-            # а также между триплетами или и
-            for field_triplet in filter:
-                name, operator, value = field_triplet
-                if operator in ["in", "not in"]:
-                    # SQL IN, NOT IN
-                    list_condition = [field for field in value]
-                    query_placeholders = ", ".join(["%s"] * len(list_condition))
-                    where_condition.append(
-                        f"{name} {operator} (%s)" % query_placeholders
-                    )
-                    where_values += tuple(list_condition)
-                if operator in [
-                    "like",
-                    "ilike",
-                    "=like",
-                    "=ilike",
-                    "not ilike",
-                    "not like",
-                ]:
-                    # SQL LIKE ILIKE
-                    where_condition.append(f"{name} {operator} %s")
-                    # экранирующий процент, чтобы добавить один процент в строку,
-                    # чтобы поиск был в любой части строки %%
-                    where_values += ("%%" + value + "%%",)
-                if operator in ["=", ">", "<", "!=", ">=", "<="]:
-                    # SQL "=", ">", "<", "!=", ">=", "<="
-                    where_condition.append(f"{name} {operator} %s")
-                    where_values += (value,)
-            if where_condition:
-                where = "WHERE " + " and ".join(where_condition)
+            where_clause, where_values = cls._parse_filter(filter, dialect)
+            where = f"WHERE {where_clause}"
 
-        stmt = f"select {fields_store_stmt} from {cls.__table__} {where} ORDER BY {sort} {order} "
+        stmt = f"SELECT {fields_store_stmt} FROM {cls.__table__} {where} ORDER BY {sort} {order} "
 
-        if end != None and start != None:
+        if end is not None and start is not None:
             stmt += "LIMIT %s OFFSET %s"
             val = (end - start, start)
         elif limit:
@@ -145,10 +255,91 @@ class BuilderCRUDPrimary(Model):
             val = (limit,)
         else:
             val = tuple()
+
         if where_values:
             val = where_values + val
 
         return stmt, val
+
+    # @classmethod
+    # async def build_search(
+    #     cls,
+    #     fields: list[str] = ["id"],
+    #     start: int | None = None,
+    #     end: int | None = None,
+    #     limit: int = 80,
+    #     order: Literal["DESC", "ASC", "desc", "asc"] = "DESC",
+    #     sort: str = "id",
+    #     filter: list[FilterTriplet] | None = None,
+    #     raw: bool = False,
+    #     dialect="postgres",
+    # ):
+    #     # SEARCH STORE
+    #     # if not fields:
+    #     #     fields_store_stmt = ",".join(f'"{name}"' for name in cls.get_store_fields())
+    #     # else:
+    #     if dialect == "postgres":
+    #         escape = '"'
+    #     else:
+    #         escape = "`"
+    #     fields_store_stmt = ",".join(
+    #         f"{escape}{name}{escape}"
+    #         for name in fields
+    #         if name in cls.get_store_fields()
+    #     )
+
+    #     where = ""
+    #     where_values = ()
+    #     where_condition = []
+    #     if filter:
+    #         # TODO: поддержка операций для связей
+    #         # а также между триплетами или и
+    #         for field_triplet in filter:
+    #             name, operator, value = field_triplet
+    #             if operator in ["in", "not in"]:
+    #                 # SQL IN, NOT IN
+    #                 list_condition = [field for field in value]
+    #                 query_placeholders = ", ".join(
+    #                     ["%s"] * len(list_condition)
+    #                 )
+    #                 where_condition.append(
+    #                     f"{name} {operator} (%s)" % query_placeholders
+    #                 )
+    #                 where_values += tuple(list_condition)
+    #             if operator in [
+    #                 "like",
+    #                 "ilike",
+    #                 "=like",
+    #                 "=ilike",
+    #                 "not ilike",
+    #                 "not like",
+    #             ]:
+    #                 # SQL LIKE ILIKE
+    #                 where_condition.append(f"{name} {operator} %s")
+    #                 # экранирующий процент, чтобы добавить один процент в строку,
+    #                 # чтобы поиск был в любой части строки %%
+    #                 where_values += ("%%" + value + "%%",)
+    #             if operator in ["=", ">", "<", "!=", ">=", "<="]:
+    #                 # SQL "=", ">", "<", "!=", ">=", "<="
+    #                 where_condition.append(f"{name} {operator} %s")
+    #                 where_values += (value,)
+    #         if where_condition:
+    #             where = "WHERE " + " and ".join(where_condition)
+
+    #     stmt = f"select {fields_store_stmt} from {cls.__table__} {where} ORDER BY {sort} {order} "
+
+    #     if end != None and start != None:
+    #         stmt += "LIMIT %s OFFSET %s"
+    #         val = (end - start, start)
+    #     elif limit:
+    #         stmt += "LIMIT %s"
+    #         val = (limit,)
+    #     else:
+    #         val = tuple()
+    #     if where_values:
+    #         val = where_values + val
+
+    #     return stmt, val
 
     @classmethod
     async def build_table_len(cls):

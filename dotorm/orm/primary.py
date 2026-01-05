@@ -1,6 +1,6 @@
 from typing import Self
 
-from ..databases.postgres.session import PostgresSession
+from ..databases.postgres.session import NoTransactionSession, PostgresSession
 from ..builder.primary import BuilderCRUDPrimary
 
 
@@ -8,6 +8,11 @@ class OrmPrimary(BuilderCRUDPrimary):
     @staticmethod
     def _is_postgres(session):
         return PostgresSession in type(session).__bases__
+
+    @classmethod
+    def _is_postgres_pool(cls):
+        # return PostgresSession in type(session).__bases__
+        return cls._pool == NoTransactionSession
 
     async def delete(self, session=None):
         if session is None:
@@ -95,7 +100,10 @@ class OrmPrimary(BuilderCRUDPrimary):
     async def get(cls, id, fields: list[str] = [], session=None):
         if session is None:
             session = cls._get_db_session()
-        stmt, values = await cls.build_get(id, fields)
+        dialect = "postgres"
+        if not cls._is_postgres:
+            dialect = "mysql"
+        stmt, values = await cls.build_get(id, fields, dialect=dialect)
         func_prepare = cls.prepare_form_id
         func_cur = "fetchall"
 

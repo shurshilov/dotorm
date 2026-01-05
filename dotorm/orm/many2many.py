@@ -1,6 +1,8 @@
 import asyncio
 from typing import Literal
 
+from .primary import OrmPrimary
+
 from ..builder.primary import BuilderCRUDPrimary
 
 
@@ -11,7 +13,7 @@ from ..fields import Field, Many2many, Many2one, One2many
 # BuilderCRUDPrimary, BuilderMany2many
 # для build_search_relation наледование от BuilderCRUDRelashions
 # class OrmMany2many(BuilderCRUDRelashions):
-class OrmMany2many(BuilderCRUDPrimary, BuilderCRUDRelashions):
+class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
     @classmethod
     async def get_many2many(
         cls,
@@ -31,7 +33,9 @@ class OrmMany2many(BuilderCRUDPrimary, BuilderCRUDRelashions):
         if session is None:
             session = cls._get_db_session()
         # защита, оставить только те поля, которые действительно хранятся в базе
-        fields_store = [name for name in cls.get_store_fields() if name in fields]
+        fields_store = [name for name in comodel.get_store_fields() if name in fields]
+        if not fields_store:
+            fields_store = comodel.get_store_fields()
         stmt, values = await cls.build_get_many2many(
             id,
             comodel,
@@ -94,7 +98,13 @@ class OrmMany2many(BuilderCRUDPrimary, BuilderCRUDRelashions):
 
     @classmethod
     async def _records_list_get_relation(cls, session, fields_relation, records):
-        request_list = await cls.build_search_relation(fields_relation, records)
+        dialect = "postgres"
+        if not cls._is_postgres:
+            dialect = "mysql"
+
+        request_list = await cls.build_search_relation(
+            fields_relation, records, dialect=dialect
+        )
         execute_list = [
             session.execute(
                 stmt=req.stmt,

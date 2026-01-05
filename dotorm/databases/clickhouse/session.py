@@ -6,7 +6,7 @@ from ..abstract.session import SessionAbstract
 class ClickhouseSession(SessionAbstract): ...
 
 
-class ClickhouseSessionWithPool(ClickhouseSession):
+class NoTransactionSession(ClickhouseSession):
     "Этот класс берет соединение из пулла и выполняет запрос в нем."
 
     def __init__(self, pool: asynch.Pool):

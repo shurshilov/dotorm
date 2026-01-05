@@ -3,7 +3,7 @@ import asyncio
 import logging
 import time
 
-from backend.base.databases.abstract.types import (
+from ..abstract.types import (
     ClickhousePoolSettings,
     ContainerSettings,
 )
