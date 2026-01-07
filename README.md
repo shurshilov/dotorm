@@ -42,6 +42,7 @@
 | 🔗 **Relations** | Many2One, One2Many, Many2Many, One2One |
 | 🛡️ **Security** | Parameterized queries, SQL injection protection |
 | 📦 **Batch Operations** | Optimized bulk create/update/delete |
+| 💾 **Support Transaction** | Support async transaction |
 | 🚫 **N+1 Solution** | Built-in relation loading optimization |
 | 🔌 **Multi-DB** | PostgreSQL, MySQL, ClickHouse |
 | 🏭 **DDL** | Automatic table creation and migration |
