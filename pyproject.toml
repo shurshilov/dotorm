@@ -9,7 +9,7 @@ description = "Async Python ORM for PostgreSQL, MySQL and ClickHouse with dot-no
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "shurshilov", email = "shurshilov.a@yandex.ru"}
+    {name = "shurshilov", email = "shurshilov.s@yandex.ru"}
 ]
 keywords = ["orm", "async", "postgresql", "mysql", "clickhouse", "database", "asyncio"]
 classifiers = [
@@ -74,25 +74,3 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
-asyncio_mode = "auto"
-markers = [
-    "unit: Unit tests (no database required)",
-    "integration: Integration tests (requires PostgreSQL)",
-    "slow: Slow running tests",
-]
-filterwarnings = ["ignore::DeprecationWarning"]
-addopts = "-v --tb=short"
-
-[tool.coverage.run]
-source = ["dotorm"]
-branch = true
-
-[tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-]
