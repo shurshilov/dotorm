@@ -1,0 +1,591 @@
+"""DotModel - main ORM model class."""
+
+from abc import ABCMeta
+import asyncio
+from enum import IntEnum
+import json
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Callable,
+    ClassVar,
+    Type,
+    Union,
+    dataclass_transform,
+)
+
+from .components.dialect import POSTGRES, Dialect
+
+if TYPE_CHECKING:
+    from .builder.builder import Builder
+    import aiomysql
+    import asyncpg
+
+
+from .databases.mysql.session import (
+    NoTransactionSession as MysqlNoTransactionSession,
+)
+from .databases.postgres.session import (
+    NoTransactionSession as PostgresNoTransactionSession,
+)
+from .fields import (
+    AttachmentOne2many,
+    Field,
+    JSONField,
+    Many2many,
+    Many2one,
+    One2many,
+    One2one,
+    AttachmentMany2one,
+)
+
+
+class JsonMode(IntEnum):
+    FORM = 1
+    LIST = 2
+    CREATE = 3
+
+
+def depends(*field_names: str) -> Callable[[Callable], Callable]:
+    """
+    Декоратор для вычисляемых полей.
+    Указывает, от каких полей зависит вычисление.
+    Поддерживает вложенные зависимости.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        func.compute_deps = set(field_names)
+        return func
+
+    return decorator
+
+
+@dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
+class ModelMetaclass(ABCMeta): ...
+
+
+# Import mixins here to avoid circular imports
+from .orm.mixins.ddl import DDLMixin
+from .orm.mixins.primary import OrmPrimaryMixin
+from .orm.mixins.many2many import OrmMany2manyMixin
+from .orm.mixins.relations import OrmRelationsMixin
+
+
+class DotModel(
+    DDLMixin,
+    OrmRelationsMixin,
+    OrmMany2manyMixin,
+    OrmPrimaryMixin,
+    metaclass=ModelMetaclass,
+):
+    """
+    Main ORM model class.
+
+    Combines all functionality through mixins:
+    - OrmPrimaryMixin: Basic CRUD operations (create, get, update, delete)
+    - OrmMany2manyMixin: Many-to-many relation operations
+    - OrmRelationsMixin: Search and relation loading
+    - DDLMixin: Table creation (DDL operations)
+
+    Example:
+        from dotorm import DotModel, Integer, Char, Many2one
+        from dotorm.components import POSTGRES
+
+        class User(DotModel):
+            __table__ = "users"
+            _dialect = POSTGRES
+
+            id: int = Integer(primary_key=True)
+            name: str = Char(max_length=100)
+            role_id: int = Many2one(lambda: Role)
+
+        # CRUD operations
+        user = await User.get(1)
+        users = await User.search(fields=["id", "name"], limit=10)
+        new_id = await User.create(User(name="John"))
+        await user.update(User(name="Jane"))
+        await user.delete()
+
+        # DDL operations
+        await User.__create_table__()
+    """
+
+    # class variables (it is intended to be shared by all instances)
+    # name of table in database
+    __table__: ClassVar[str]
+    # path name for route ednpoints CRUD
+    __route__: ClassVar[str]
+    # create CRUD endpoints automaticaly or not
+    __auto_crud__: ClassVar[bool] = False
+    # name database
+    __database__: ClassVar[str]
+    # pool of connections to database
+    # use for default usage in orm (without explicit set)
+    _pool: ClassVar[Union["aiomysql.Pool", "asyncpg.Pool"]]
+    # class that implement no transaction execute
+    # single connection -> execute -> release connection to pool
+    # use for default usage in orm (without explicit set)
+    # _no_transaction: ClassVar[
+    #     Type[MysqlNoTransactionSession | PostgresNoTransactionSession]
+    # ]
+    _no_transaction: ClassVar[Type]
+    # base validation schema for routers endpoints
+    # __schema__: ClassVar[Type]
+    __schema__: ClassVar[Annotated]
+    # variables for override auto created - update and create schemas
+    __schema_create__: ClassVar[Type]
+    __schema_read_output__: ClassVar[Type]
+    __schema_read_search_output__: ClassVar[Type]
+    __schema_read_search_input__: ClassVar[Type]
+    __schema_update__: ClassVar[Type]
+    __response_model_exclude__: ClassVar[set[str] | None] = None
+    # its auto
+    # __schema_output_search__: ClassVar[Type]
+
+    # id required field in any model
+    id: ClassVar[int]
+
+    _dialect: ClassVar[Dialect] = POSTGRES
+    _builder: ClassVar["Builder"]
+
+    def __init_subclass__(cls, **kwargs):
+        """
+        1.Срабатывает один раз при определении подкласса,а не при каждом создании экземпляра
+        2.Позволяет устанавливать значения на уровне класса, а не объекта
+        3.__init_subclass__ — это правильный и "официальный"
+        способ кастомизировать поведение наследования
+        """
+        # не забудем super на случай MRO
+        super().__init_subclass__(**kwargs)
+        # Здесь мы проверяем не hasattr, а __dict__,
+        # чтобы не словить унаследованный __route__
+        if "__table__" in cls.__dict__ and "__route__" not in cls.__dict__:
+            # установить имя роута такой же как имя модели по умолчанию
+            cls.__route__ = "/" + cls.__table__
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # задаем переменные переданные с помощью kwargs
+        # instance variables (it is intended to be used by one instance)
+        for name, value in kwargs.items():
+            setattr(self, name, value)
+
+        # Десериализация JSON полей (если пришла строка из БД)
+        for name, field in self.get_fields().items():
+            if isinstance(field, JSONField):
+                value = getattr(self, name, None)
+                # Если значение - строка, десериализуем в dict/list
+                if isinstance(value, str):
+                    try:
+                        setattr(self, name, json.loads(value))
+                    except (json.JSONDecodeError, TypeError):
+                        pass  # Оставляем как есть если не валидный JSON
+
+        # если поле вычисляемое и не хранящееся в БД то вычислить его
+        for name, field in self.get_fields().items():
+            if field.compute and not field.store:
+                setattr(self, name, field.compute(self))
+
+    #             # Если есть функция вычисления (имя метода)
+    #             if isinstance(field.compute, str):
+    #                 # Проверяем, существует ли метод
+    #                 method_name = field.compute
+    #                 if hasattr(self, method_name):
+    #                     # Вычисляем значение сразу
+    #                     method = getattr(self, method_name)
+    #                     if hasattr(method, "compute_deps"):
+    #                         # Для методов с зависимостями - не вычисляем сразу
+    #                         # а оставляем как не вычисленное
+    #                         pass
+    #                     else:
+    #                         # Вычисляем значение
+    #                         setattr(self, name, method())
+    #                 else:
+    #                     raise AttributeError(
+    #                         f"Method '{method_name}' not found for field '{name}'"
+    #                     )
+
+    # def __setattr__(self, name: str, value: Any) -> None:
+    #     """Переопределяем для отслеживания изменений"""
+    #     # Если это поле модели и оно изменилось
+    #     if name in self.get_fields():
+    #         field = self.get_fields()[name]
+    #         if field.store:  # Только если поле хранится в БД
+    #             # Инвалидируем зависимые поля
+    #             self._invalidate_dependent_fields(name)
+    #     super().__setattr__(name, value)
+
+    # def _invalidate_dependent_fields(self, changed_field: str):
+    #     """Инвалидировать все зависимые поля"""
+    #     # Проходим по всем полям модели
+    #     for field_name, field in self.get_fields().items():
+    #         # Если это вычисляемое поле с зависимостями
+    #         if field.compute and not field.store:
+    #             method_name = field.compute
+    #             if isinstance(method_name, str) and hasattr(self, method_name):
+    #                 method = getattr(self, method_name)
+    #                 # Проверяем, есть ли зависимости
+    #                 if hasattr(method, "compute_deps"):
+    #                     deps = method.compute_deps
+    #                     if changed_field in deps:
+    #                         # Устанавливаем флаг, что поле нужно пересчитать
+    #                         # Вместо удаления атрибута - устанавливаем флаг
+    #                         setattr(self, f"_{field_name}_computed", False)
+
+    @classmethod
+    def _get_db_session(cls):
+        return cls._no_transaction(cls._pool)
+
+    @classmethod
+    def prepare_form_ids(cls, rows: list[dict]):
+        """Deserialize from list of dicts to list of objects."""
+        records = [cls.prepare_form_id([r]) for r in rows]
+        return records
+
+    @classmethod
+    def prepare_form_id(cls, r: list):
+        """Deserialize from dict to object."""
+        if not r:
+            return None
+        if len(r) > 1:
+            raise Exception("More than 1 record in form")
+        record = cls(**r[0])
+        return record
+
+    @classmethod
+    def prepare_list_ids(cls, rows: list[dict]):
+        """Десериализация из списка соварей в список объектов.
+        Используется при получении данных из БД"""
+        return [cls(**r) for r in rows]
+
+    @classmethod
+    def prepare_list_id(cls, r: list):
+        """Десериализация из словаря в объект.
+        Используется при получении данных из БД.
+        Заменяет m2o с объекта Model на {id:Model}
+        Заменяет m2m и o2m с списка Model на list[{id:Model}]
+        """
+        if len(r) != 1:
+            raise
+        record = cls(**r[0])
+        return record
+
+    @classmethod
+    def get_fields(cls) -> dict[str, Field]:
+        """Основная функция, которая возвращает все поля модели."""
+        return {
+            attr_name: attr
+            for attr_name, attr in cls.__dict__.items()
+            if isinstance(attr, Field)
+        }
+
+    @classmethod
+    def get_compute_fields(cls):
+        """Только те поля, которые имеют связи. Ассоциации."""
+        return [
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if field.compute
+        ]
+
+    @classmethod
+    def get_relation_fields(cls):
+        """Только те поля, которые имеют связи. Ассоциации."""
+        return [
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if field.relation
+        ]
+
+    @classmethod
+    def get_relation_fields_m2m(cls):
+        """Только те поля, которые имеют связи многие ко многим."""
+        return {
+            name: field
+            for name, field in cls.get_fields().items()
+            if isinstance(field, Many2many)
+        }
+
+    @classmethod
+    def get_relation_fields_m2m_o2m(cls):
+        """Только те поля, которые имеют связи многие ко многим или один ко многим."""
+        return [
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if isinstance(
+                field, (Many2many, One2many, AttachmentOne2many, One2one)
+            )
+        ]
+
+    @classmethod
+    def get_relation_fields_attachment(cls):
+        """Только те поля, которые имеют связи m2o для вложений."""
+        return [
+            (name, field)
+            for name, field in cls.get_fields().items()
+            if isinstance(field, (AttachmentMany2one, AttachmentOne2many))
+        ]
+
+    @classmethod
+    def get_store_fields(cls) -> list[str]:
+        """Возвращает только те поля, которые хранятся в БД.
+        Поля, у которых store = False, не хранятся в бд.
+        По умолчанию все поля store = True, кроме One2many и Many2many
+        """
+        return [
+            name for name, field in cls.get_fields().items() if field.store
+        ]
+
+    @classmethod
+    def get_store_fields_omit_m2o(cls) -> list[str]:
+        """Возвращает только те поля, которые хранятся в БД.
+        Поля, у которых store = False, не хранятся в бд.
+        По умолчанию все поля store = True, кроме One2many и Many2many.
+        Исключает m2o поля.
+        Используется при чтении связанного поля, для остановки вложенности.
+        """
+        return [
+            name
+            for name, field in cls.get_fields().items()
+            if field.store and not isinstance(field, Many2one)
+        ]
+
+    @classmethod
+    def get_store_fields_dict(cls) -> dict[str, Field]:
+        """Возвращает только те поля, которые хранятся в БД.
+        Результат в виде dict"""
+        return {
+            name: field
+            for name, field in cls.get_fields().items()
+            if field.store
+        }
+
+    @classmethod
+    async def get_default_values(
+        cls, fields_client_nested: dict[str, list[str]]
+    ) -> dict[str, Field]:
+        """
+        fields_client_nested - словарь вложенных полей для полей m2m и o2m
+
+        Возвращает поля с установленным значением по умолчанию.
+        Используется при создании записи(сущности) на фронтенде. Например
+        мы создаем пользователя поле active у которого по умолчанию True.
+        """
+        default_values = {}
+        for name, field in cls.get_fields().items():
+            if field.default is not None:
+                if callable(field.default):
+                    # если корутина то сделать авейт
+                    if asyncio.iscoroutinefunction(field.default):
+                        res = await field.default()
+                        default_values.update({name: res})
+                    # иначе просто вызов
+                    else:
+                        default_values.update({name: field.default()})
+                else:
+                    default_values.update({name: field.default})
+
+            elif isinstance(field, (One2many, Many2many)):
+                # значение по умолчанию для m2m и o2m
+                # если с клиента передан список вложенных полей,
+                # то установить значение по умолчанию
+                fields_nested = fields_client_nested.get(name)
+                if fields_nested:
+                    fields_info = field.relation_table.get_fields_info_list(
+                        fields_nested
+                    )
+                    x2m_default = {
+                        "data": [],
+                        "fields": fields_info,
+                        "total": 0,
+                    }
+                    default_values.update({name: x2m_default})
+
+        return default_values
+
+    @classmethod
+    def get_none_update_fields_set(cls) -> set[str]:
+        """Возвращает только те поля, которые не используются при обновлении.
+        1. Являются primary key (обычно id). (нельзя обновить ид)
+        2. Поля, у которых store = False, не хранятся в бд.
+        По умолчанию все поля store = True, кроме One2many и Many2many.
+        (нельзя обновить в БД то чего там нет)
+        3. Все relation поля, кроме many2one (так как это просто число, ид)
+        (нельзя обновить в БД то чего там нет, one2many)
+        """
+        return {
+            name
+            for name, field in cls.get_fields().items()
+            if not field.store
+            or field.primary_key
+            or (field.relation and not isinstance(field, Many2one))
+        }
+
+    @classmethod
+    def get_fields_info_list(cls, fields_list: list[str]):
+        """Get field info for list view."""
+        fields_info = []
+        for name, field in cls.get_fields().items():
+            if name in fields_list:
+                if field.relation:
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "relation": (
+                                field.relation_table.__table__
+                                if field.relation_table
+                                else ""
+                            ),
+                        }
+                    )
+                else:
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "options": field.options or [],
+                        }
+                    )
+        return fields_info
+
+    @classmethod
+    def get_fields_info_form(cls, fields_list: list[str]):
+        """Get field info for form view."""
+        fields_info = []
+        for name, field in cls.get_fields().items():
+            if name in fields_list:
+                if field.relation:
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "relatedModel": (
+                                field.relation_table.__table__
+                                if field.relation_table
+                                else ""
+                            ),
+                            "relatedField": (field.relation_table_field or ""),
+                        }
+                    )
+                else:
+                    fields_info.append(
+                        {
+                            "name": name,
+                            "type": field.__class__.__name__,
+                            "options": field.options or [],
+                        }
+                    )
+        return fields_info
+
+    def get_json(
+        self, exclude_unset=False, only_store=None, mode=JsonMode.LIST
+    ):
+        """Возвращает все поля модели.
+        Для экземпляра класса. В экземпляре поля (класс Field)
+        преобразуются в реальные данные например Integer -> int"""
+        fields_json = {}
+        # fields - это поля описанные в модели (классе)
+        if only_store:
+            fields = self.get_store_fields_dict().items()
+        else:
+            fields = self.get_fields().items()
+
+        for field_name, field_class in fields:
+            # field - это поле из экземпляра.
+            # 1. оно может содержать данные, если задано.
+            # 2. оно может содержать класс Field, если не задано.
+            field = getattr(self, field_name)
+
+            # НЕ ЗАДАНО
+            # если поле экземпляра класса, осталось классом Field
+            # это значит что оно не было считано из БД
+            if isinstance(field, Field):
+                # если установлен флаг исключить не заданные,
+                # то ничего не делать
+                if not exclude_unset:
+                    # иначе взять значение по умолчанию или None
+                    if not field.default is None:
+                        fields_json[field_name] = field.default
+                    else:
+                        fields_json[field_name] = None
+
+            # ЗАДАНО как many2one
+            # если поле является моделью то это many2one
+            elif isinstance(field, DotModel):
+                if mode == JsonMode.LIST:
+                    # обрубаем, исключаем все релейшен поля
+                    fields_json[field_name] = {
+                        "id": field.id,
+                        "name": getattr(field, "name", str(field.id)),
+                    }
+                elif mode == JsonMode.FORM:
+                    fields_json[field_name] = field.json()
+                elif mode == JsonMode.CREATE:
+                    fields_json[field_name] = field.id
+
+            # ЗАДАНО как many2many или one2many
+            elif isinstance(
+                field_class, (Many2many, One2many, AttachmentOne2many)
+            ):
+                if mode == JsonMode.LIST:
+                    fields_json[field_name] = [
+                        {
+                            "id": rec.id,
+                            "name": rec.name or str(rec.id),
+                        }
+                        for rec in field
+                    ]
+                elif mode == JsonMode.FORM:
+                    # TODO: тут надо оставить только те поля которые есть в текущий момент
+                    fields_json[field_name] = {
+                        "data": [rec.json() for rec in field["data"]],
+                        "fields": field["fields"],
+                        "total": field["total"],
+                    }
+
+            # Сериализуем JSONField в строку при записи в БД
+            elif (
+                only_store
+                and isinstance(field_class, JSONField)
+                and isinstance(field, (dict, list))
+            ):
+                fields_json[field_name] = json.dumps(field, ensure_ascii=False)
+            # ЗАДАНО как значение (число строка время...)
+            # иначе поле считается прочитанным из БД и просто пробрасывается
+            else:
+                fields_json[field_name] = field
+        return fields_json
+
+    def json(
+        self,
+        include={},
+        exclude={},
+        exclude_none=False,
+        exclude_unset=False,
+        only_store=None,
+        mode=JsonMode.LIST,
+    ):
+        """Сериализация экземпляра модели в dict python.
+
+        Keyword Arguments:
+            include -- только эти поля
+            exclude -- исключить поля
+            exclude_none -- исключить поля со значением None
+            only_store -- только те поля, которые хранятьсь в БД
+
+        Returns:
+            python dict
+        """
+        record = self.get_json(exclude_unset, only_store, mode)
+        if include:
+            record = {k: v for k, v in record.items() if k in include}
+        if exclude:
+            record = {k: v for k, v in record.items() if k not in exclude}
+        if exclude_none:
+            record = {k: v for k, v in record.items() if v is not None}
+        return record
+
+
+# Backward compatibility alias
+Model = DotModel
