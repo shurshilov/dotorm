@@ -1,5 +1,10 @@
-from __future__ import annotations  # 👈 Это нужно добавить!
-from typing import Any, Callable, Literal, Union
+"""Request builder for relation queries."""
+
+from __future__ import annotations
+from dataclasses import dataclass, field as d_field
+from typing import Any, Callable, ClassVar
+from enum import Enum, auto
+
 from ..fields import (
     AttachmentMany2one,
     AttachmentOne2many,
@@ -9,108 +14,138 @@ from ..fields import (
     One2many,
 )
 
-# Поддерживаемые SQL-операторы
-SQLOperator = Literal[
-    "=",
-    ">",
-    "<",
-    "!=",
-    ">=",
-    "<=",
-    "like",
-    "ilike",
-    "=like",
-    "=ilike",
-    "not ilike",
-    "not like",
-    "in",
-    "not in",
-    "is null",
-    "is not null",
-    "between",
-    "not between",
-]
-
-# Одинарный фильтр: (поле, оператор, значение)
-# FilterTriplet = tuple[str, SQLOperator, Any]
-
-# # Рекурсивный тип фильтра
-# FilterExpression = Union[
-#     FilterTriplet,
-#     tuple[Literal["not"], "FilterExpression"],  # NOT выражение
-#     list[
-#         Union["FilterExpression", Literal["and", "or"]]
-#     ],  # Список выражений с логикой
-# ]
-
-# FilterExpression = Annotated[Any]
-FilterTriplet = tuple[str, SQLOperator, Any]
-
-FilterExpression = list[
-    FilterTriplet
-    | tuple[Literal["not"], "FilterExpression"]
-    | list[Union["FilterExpression", Literal["and", "or"]]],
-]
-
-# @dataclass
-# class FilterTriplet[Model]:
-#     # allowed_fields = list(self.Model.get_fields())
-#     # (list[Literal[*allowed_fields]], ...)
-#     name: str
-#     operator: operator
-#     value: Any
+# Re-export from components for backward compatibility
+from ..components.filter_parser import (
+    FilterExpression,
+    FilterTriplet,
+    SQLOperator,
+)
 
 
+class FetchMode(Enum):
+    """Database cursor fetch mode."""
+
+    FETCHALL = auto()
+    FETCHONE = auto()
+    FETCHMANY = auto()
+
+
+# Type aliases for relation fields
+RelationField = Many2many | One2many | Many2one
+FormRelationField = (
+    Many2many | One2many | Many2one | AttachmentMany2one | AttachmentOne2many
+)
+
+
+@dataclass(slots=True)
 class RequestBuilder:
-    stmt: str
+    """
+    Container for relation query request.
+
+    Immutable data container with computed properties for
+    determining how to process query results.
+    """
+
+    stmt: str | None
     value: Any
     field_name: str
     field: Field
-    fields: list
-    # function_prepare: Callable
-    function_curcor: str = "fetchall"
+    fields: list[str] = d_field(default_factory=lambda: ["id", "name"])
+    fetch_mode: FetchMode = FetchMode.FETCHALL
 
-    def __init__(
-        self, stmt, value, field_name, field, fields=["id", "name"]
-    ) -> None:
-        self.stmt = stmt
-        self.value = value
-        self.field_name = field_name
-        self.field = field
-        self.fields = fields
+    # Mapping for prepare functions based on field type
+    _PREPARE_FUNCS: ClassVar[dict[type, str]] = {
+        Many2many: "prepare_list_ids",
+        One2many: "prepare_list_ids",
+        Many2one: "prepare_list_ids",
+    }
+
+    @property
+    def function_cursor(self) -> str:
+        """Returns cursor method name based on fetch mode."""
+        return self.fetch_mode.name.lower()
 
     @property
     def function_prepare(self) -> Callable:
-        if isinstance(self.field, (Many2many, One2many, Many2one)):
-            return self.field.relation_table.prepare_list_ids
+        """
+        Returns appropriate prepare function based on field type.
+
+        For relation fields (Many2many, One2many, Many2one),
+        returns prepare_list_ids from relation_table.
+        """
+        for field_type, method_name in self._PREPARE_FUNCS.items():
+            if isinstance(self.field, field_type):
+                return getattr(self.field.relation_table, method_name)
+
+        # Fallback for non-relation fields
         # TODO: помоему тут ошибка relation_table всегда будет пустое
         # а реквест билдер всеравно не используется в не связей
         # и else никогда не вызывается
-        else:
-            return self.field.relation_table.prepare_list_id
-
-    @function_prepare.setter
-    def function_prepare(self, function_prepare):
-        self._function_prepare = function_prepare
+        return getattr(self.field.relation_table, "prepare_list_id")
 
 
+@dataclass(slots=True)
 class RequestBuilderForm(RequestBuilder):
+    """
+    Container for form relation query request.
+
+    Extends RequestBuilder with form-specific prepare functions.
+    """
+
+    # Override mapping for form context
+    _PREPARE_FUNCS: ClassVar[dict[type, str]] = {
+        Many2many: "prepare_form_ids",
+        One2many: "prepare_form_ids",
+        Many2one: "prepare_form_ids",
+        AttachmentMany2one: "prepare_form_ids",
+        AttachmentOne2many: "prepare_form_ids",
+    }
+
     @property
     def function_prepare(self) -> Callable:
-        if isinstance(
-            self.field,
-            (
-                Many2many,
-                One2many,
-                Many2one,
-                AttachmentMany2one,
-                AttachmentOne2many,
-            ),
-        ):
-            return self.field.relation_table.prepare_form_ids
-        else:
-            return self.field.relation_table.prepare_form_id
+        """
+        Returns appropriate prepare function for form context.
 
-    # @function_prepare.setter
-    # def function_prepare(self, function_prepare):
-    #     self._function_prepare = function_prepare
+        Form context uses prepare_form_ids/prepare_form_id methods.
+        """
+        for field_type, method_name in self._PREPARE_FUNCS.items():
+            if isinstance(self.field, field_type):
+                return getattr(self.field.relation_table, method_name)
+
+        return getattr(self.field.relation_table, "prepare_form_id")
+
+
+def create_request_builder(
+    stmt: str | None,
+    value: Any,
+    field_name: str,
+    field: Field,
+    fields: list[str] | None = None,
+    *,
+    form_mode: bool = False,
+) -> RequestBuilder:
+    """
+    Factory function for creating appropriate RequestBuilder.
+
+    Args:
+        stmt: SQL statement
+        value: Query parameters
+        field_name: Name of the field
+        field: Field instance
+        fields: Fields to select (default: ["id", "name"])
+        form_mode: If True, creates RequestBuilderForm
+
+    Returns:
+        RequestBuilder or RequestBuilderForm instance
+    """
+    if fields is None:
+        fields = ["id", "name"]
+
+    cls = RequestBuilderForm if form_mode else RequestBuilder
+    return cls(
+        stmt=stmt,
+        value=value,
+        field_name=field_name,
+        field=field,
+        fields=fields,
+    )

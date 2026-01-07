@@ -1,3 +1,5 @@
+"""Abstract pool interface."""
+
 from abc import ABC, abstractmethod
 
 

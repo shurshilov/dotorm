@@ -1,6 +1,9 @@
+"""DotModel - main ORM model class."""
+
 from abc import ABCMeta
 import asyncio
 from enum import IntEnum
+import json
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -8,12 +11,14 @@ from typing import (
     Callable,
     ClassVar,
     Type,
-    TypeAlias,
     Union,
     dataclass_transform,
 )
 
+from .components.dialect import POSTGRES, Dialect
+
 if TYPE_CHECKING:
+    from .builder.builder import Builder
     import aiomysql
     import asyncpg
 
@@ -27,6 +32,7 @@ from .databases.postgres.session import (
 from .fields import (
     AttachmentOne2many,
     Field,
+    JSONField,
     Many2many,
     Many2one,
     One2many,
@@ -59,14 +65,51 @@ def depends(*field_names: str) -> Callable[[Callable], Callable]:
 class ModelMetaclass(ABCMeta): ...
 
 
-class Model(metaclass=ModelMetaclass):
-    """Class for data storage fro DB.
-    And manage this data, CRUD.
-    """
+# Import mixins here to avoid circular imports
+from .orm.mixins.ddl import DDLMixin
+from .orm.mixins.primary import OrmPrimaryMixin
+from .orm.mixins.many2many import OrmMany2manyMixin
+from .orm.mixins.relations import OrmRelationsMixin
 
-    # Here ClassVar is a special class defined by the typing module
-    # that indicates to the static type checker that this variable
-    # should not be set on instances.
+
+class DotModel(
+    DDLMixin,
+    OrmRelationsMixin,
+    OrmMany2manyMixin,
+    OrmPrimaryMixin,
+    metaclass=ModelMetaclass,
+):
+    """
+    Main ORM model class.
+
+    Combines all functionality through mixins:
+    - OrmPrimaryMixin: Basic CRUD operations (create, get, update, delete)
+    - OrmMany2manyMixin: Many-to-many relation operations
+    - OrmRelationsMixin: Search and relation loading
+    - DDLMixin: Table creation (DDL operations)
+
+    Example:
+        from dotorm import DotModel, Integer, Char, Many2one
+        from dotorm.components import POSTGRES
+
+        class User(DotModel):
+            __table__ = "users"
+            _dialect = POSTGRES
+
+            id: int = Integer(primary_key=True)
+            name: str = Char(max_length=100)
+            role_id: int = Many2one(lambda: Role)
+
+        # CRUD operations
+        user = await User.get(1)
+        users = await User.search(fields=["id", "name"], limit=10)
+        new_id = await User.create(User(name="John"))
+        await user.update(User(name="Jane"))
+        await user.delete()
+
+        # DDL operations
+        await User.__create_table__()
+    """
 
     # class variables (it is intended to be shared by all instances)
     # name of table in database
@@ -83,9 +126,10 @@ class Model(metaclass=ModelMetaclass):
     # class that implement no transaction execute
     # single connection -> execute -> release connection to pool
     # use for default usage in orm (without explicit set)
-    _no_transaction: ClassVar[
-        Type[MysqlNoTransactionSession | PostgresNoTransactionSession]
-    ]
+    # _no_transaction: ClassVar[
+    #     Type[MysqlNoTransactionSession | PostgresNoTransactionSession]
+    # ]
+    _no_transaction: ClassVar[Type]
     # base validation schema for routers endpoints
     # __schema__: ClassVar[Type]
     __schema__: ClassVar[Annotated]
@@ -102,6 +146,9 @@ class Model(metaclass=ModelMetaclass):
     # id required field in any model
     id: ClassVar[int]
 
+    _dialect: ClassVar[Dialect] = POSTGRES
+    _builder: ClassVar["Builder"]
+
     def __init_subclass__(cls, **kwargs):
         """
         1.Срабатывает один раз при определении подкласса,а не при каждом создании экземпляра
@@ -111,7 +158,6 @@ class Model(metaclass=ModelMetaclass):
         """
         # не забудем super на случай MRO
         super().__init_subclass__(**kwargs)
-        # if not hasattr(cls, "__route__"):
         # Здесь мы проверяем не hasattr, а __dict__,
         # чтобы не словить унаследованный __route__
         if "__table__" in cls.__dict__ and "__route__" not in cls.__dict__:
@@ -119,24 +165,21 @@ class Model(metaclass=ModelMetaclass):
             cls.__route__ = "/" + cls.__table__
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        # for attr in dir(Message):
-        #     if isinstance(getattr(self, attr), Field):
-        #         self.fields.append(getattr(self, attr))
-
-        # задаем переменные переданные с помощью args
-        # fields = self.get_fields()
-        # for i, value in enumerate(args):
-        #     setattr(
-        #         self, fields[i], value
-        #     )
-        # if not self.__class__.__schema_create__:
-        #     self.__class__.__schema_create__ = self.__class__.__schema__
-        # if not self.__class__.__schema_update__:
-        #     self.__class__.__schema_update__ = self.__class__.__schema__
         # задаем переменные переданные с помощью kwargs
         # instance variables (it is intended to be used by one instance)
         for name, value in kwargs.items():
             setattr(self, name, value)
+
+        # Десериализация JSON полей (если пришла строка из БД)
+        for name, field in self.get_fields().items():
+            if isinstance(field, JSONField):
+                value = getattr(self, name, None)
+                # Если значение - строка, десериализуем в dict/list
+                if isinstance(value, str):
+                    try:
+                        setattr(self, name, json.loads(value))
+                    except (json.JSONDecodeError, TypeError):
+                        pass  # Оставляем как есть если не валидный JSON
 
         # если поле вычисляемое и не хранящееся в БД то вычислить его
         for name, field in self.get_fields().items():
@@ -191,86 +234,40 @@ class Model(metaclass=ModelMetaclass):
 
     @classmethod
     def _get_db_session(cls):
-        return cls._no_transaction(cls._pool)  # type: ignore
+        return cls._no_transaction(cls._pool)
 
     @classmethod
     def prepare_form_ids(cls, rows: list[dict]):
-        """Десериализация из списка соварей в список обьектов.
-        Используется при получении данных из БД"""
+        """Deserialize from list of dicts to list of objects."""
         records = [cls.prepare_form_id([r]) for r in rows]
         return records
 
     @classmethod
     def prepare_form_id(cls, r: list):
-        """Десериализация из словаря в обьект.
-        Используется при получении данных из БД"""
+        """Deserialize from dict to object."""
         if not r:
             return None
         if len(r) > 1:
-            raise Exception("Количество записей в форме больше 1")
-
+            raise Exception("More than 1 record in form")
         record = cls(**r[0])
-        # record_fields = cls(**r[0]).json(exclude_unset=True, mode=JsonMode.FORM)
-        # relation_fields = [
-        #     (name, field)
-        #     for name, field in cls.get_relation_fields()
-        #     if name in record_fields.keys()
-        # ]
-        # for name, field_class in relation_fields:
-        #     # если поле many2one или one2one то создаем инстанс модели
-        #     if isinstance(field_class, (Many2one, One2one)):
-        #         field_instance = getattr(record, name)
-        #         # field_instance = record[name]
-        #         # только если поле бы реально считано
-        #         if not isinstance(field_instance, (Many2one, One2one)):
-        #             field_instance = field_class.relation_table.prepare_form_id(
-        #                 field_instance
-        #             )
-
-        #     # если поле many2many или one2nay то создаем список инстансов модели
-        #     elif isinstance(field_class, (Many2many, One2many)):
-        #         field_values = []
-        #         field_instance = getattr(record, name)
-        #         # field_instance = record[name]
-        #         # только если поле бы реально считано
-        #         if not isinstance(field_instance, (Many2many, One2many)):
-        #             for field_row in field_instance:
-        #                 field_values.append(
-        #                     field_class.relation_table.prepare_form_id(field_row)
-        #                 )
-        #             field_instance = field_values
         return record
 
     @classmethod
     def prepare_list_ids(cls, rows: list[dict]):
-        """Десериализация из списка соварей в список обьектов.
+        """Десериализация из списка соварей в список объектов.
         Используется при получении данных из БД"""
         return [cls(**r) for r in rows]
 
     @classmethod
     def prepare_list_id(cls, r: list):
-        """Десериализация из словаря в обьект.
+        """Десериализация из словаря в объект.
         Используется при получении данных из БД.
-        Заменяет m2o с обьекта Model на {id:Model}
+        Заменяет m2o с объекта Model на {id:Model}
         Заменяет m2m и o2m с списка Model на list[{id:Model}]
         """
         if len(r) != 1:
             raise
-
         record = cls(**r[0])
-        # for name, field_class in record.get_relation_fields():
-        #     # если поле many2one или one2one то создаем инстанс модели
-        #     if isinstance(field_class, (Many2one, One2one)):
-        #         field_instance = getattr(record, name)
-        #         field_instance = {"id": field_instance}
-
-        #     # если поле many2many или one2nay то создаем список инстансов модели
-        #     elif isinstance(field_class, (Many2many, One2many)):
-        #         field_values = []
-        #         field_instance = getattr(record, name)
-        #         for field_row in field_instance:
-        #             field_values.append({"id": field_row})
-        #         field_instance = field_values
         return record
 
     @classmethod
@@ -376,8 +373,7 @@ class Model(metaclass=ModelMetaclass):
         """
         default_values = {}
         for name, field in cls.get_fields().items():
-
-            if field.default != None:
+            if field.default is not None:
                 if callable(field.default):
                     # если корутина то сделать авейт
                     if asyncio.iscoroutinefunction(field.default):
@@ -427,6 +423,7 @@ class Model(metaclass=ModelMetaclass):
 
     @classmethod
     def get_fields_info_list(cls, fields_list: list[str]):
+        """Get field info for list view."""
         fields_info = []
         for name, field in cls.get_fields().items():
             if name in fields_list:
@@ -454,6 +451,7 @@ class Model(metaclass=ModelMetaclass):
 
     @classmethod
     def get_fields_info_form(cls, fields_list: list[str]):
+        """Get field info for form view."""
         fields_info = []
         for name, field in cls.get_fields().items():
             if name in fields_list:
@@ -514,7 +512,7 @@ class Model(metaclass=ModelMetaclass):
 
             # ЗАДАНО как many2one
             # если поле является моделью то это many2one
-            elif isinstance(field, Model):
+            elif isinstance(field, DotModel):
                 if mode == JsonMode.LIST:
                     # обрубаем, исключаем все релейшен поля
                     fields_json[field_name] = {
@@ -540,15 +538,19 @@ class Model(metaclass=ModelMetaclass):
                     ]
                 elif mode == JsonMode.FORM:
                     # TODO: тут надо оставить только те поля которые есть в текущий момент
-                    # fields_info = field_class.relation_table.get_fields_info_all()
                     fields_json[field_name] = {
                         "data": [rec.json() for rec in field["data"]],
                         "fields": field["fields"],
                         "total": field["total"],
                     }
-                # elif mode == JsonMode.CREATE:
-                #     fields_json[field_name] = [{"id": rec.id} for rec in field]
 
+            # Сериализуем JSONField в строку при записи в БД
+            elif (
+                only_store
+                and isinstance(field_class, JSONField)
+                and isinstance(field, (dict, list))
+            ):
+                fields_json[field_name] = json.dumps(field, ensure_ascii=False)
             # ЗАДАНО как значение (число строка время...)
             # иначе поле считается прочитанным из БД и просто пробрасывается
             else:
@@ -570,7 +572,7 @@ class Model(metaclass=ModelMetaclass):
             include -- только эти поля
             exclude -- исключить поля
             exclude_none -- исключить поля со значением None
-            only_store -- только те поля, которые храняться в БД
+            only_store -- только те поля, которые хранятьсь в БД
 
         Returns:
             python dict
@@ -579,9 +581,11 @@ class Model(metaclass=ModelMetaclass):
         if include:
             record = {k: v for k, v in record.items() if k in include}
         if exclude:
-            record = {k: v for k, v in record.items() if not k in exclude}
+            record = {k: v for k, v in record.items() if k not in exclude}
         if exclude_none:
             record = {k: v for k, v in record.items() if v is not None}
-        # if exclude_unset:
-        #     record = {k: v for k, v in record.items() if not isinstance(v, Field)}
         return record
+
+
+# Backward compatibility alias
+Model = DotModel

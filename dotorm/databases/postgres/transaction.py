@@ -1,14 +1,32 @@
-import asyncpg
-from asyncpg.transaction import Transaction
+"""PostgreSQL transaction management."""
+
+try:
+    import asyncpg
+    from asyncpg.transaction import Transaction
+except ImportError:
+    asyncpg = None  # type: ignore
+    Transaction = None  # type: ignore
 
 from .session import TransactionSession
 
 
 class ContainerTransaction:
-    # если не передан пул, то тогда будет взят пул заданый по умолчанию в классе
-    default_pool: asyncpg.Pool | None = None
+    """
+    Transaction context manager for PostgreSQL.
 
-    def __init__(self, pool: asyncpg.Pool | None = None):
+    Acquires connection, starts transaction, executes queries,
+    commits on success, rollbacks on exception.
+
+    Example:
+        async with ContainerTransaction(pool) as session:
+            await session.execute("INSERT INTO users ...")
+            await session.execute("INSERT INTO orders ...")
+            # Commits on exit
+    """
+
+    default_pool: "asyncpg.Pool | None" = None
+
+    def __init__(self, pool: "asyncpg.Pool | None" = None):
         self.session_factory = TransactionSession
         if pool is None:
             assert self.default_pool is not None
@@ -17,8 +35,7 @@ class ContainerTransaction:
             self.pool = pool
 
     async def __aenter__(self):
-        connection: asyncpg.Connection = await self.pool.acquire()
-
+        connection: "asyncpg.Connection" = await self.pool.acquire()
         transaction = connection.transaction()
 
         assert isinstance(transaction, Transaction)

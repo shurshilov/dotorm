@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 
-from .dotorm.orm.model import DotModel
+from .dotorm.model import DotModel
 from .dotorm.fields import Boolean, Char, Integer, Many2many, One2many, One2one
 
 
@@ -50,7 +50,7 @@ class Message(DotModel):
     date: datetime.datetime | None = None
     subject: str | None = ""
     publish: bool | None = False
-    id: int | None = Integer(primary_key=True, default=None)
+    id: int = Integer(primary_key=True)
     template_id: int | None = None
     chain_id: int | None = None
     language: str | None = None
@@ -94,30 +94,32 @@ async def main():
     print("GET FIELDS")
     print(len(msg.get_fields()))
 
-    query = await Message.build_get(5)
+    query = Message._builder.build_get(5)
     print(query)
-    query = await Message.build_get(5, ["id", "date"])
+    query = Message._builder.build_get(5, ["id", "date"])
     print(query)
-    query = await msg.build_delete()
+    query = msg._builder.build_delete()
     print(query)
-    query = await Message.build_create(msg)
+    query = Message._builder.build_create(msg.json())
     print(query)
     msg_new = Message(id=5, language="en")
-    query = await msg.build_update(payload=msg_new, id=msg_new.id)
+    query = msg._builder.build_update(
+        payload_dict=msg_new.json(), id=msg_new.id
+    )
     print(query)
-    query = await Message.build_search(filter=[("id", "=", 5)])
+    query = Message._builder.build_search(filter=[("id", "=", 5)])
     print(query)
-    query = await Message.build_search(fields=["id", "date"])
+    query = Message._builder.build_search(fields=["id", "date"])
     print(query)
-    query = await Message.build_search(filter=[("id", "in", [1, 2, 3])])
+    query = Message._builder.build_search(filter=[("id", "in", [1, 2, 3])])
     print(query)
-    query = await Message.build_table_len()
+    query = Message._builder.build_table_len()
     print(query)
     msg_attr = MessageAttribute(id=5, show_in_account=True)
-    query = await msg_attr.build_update_one2one(fk_id=100, fk="message_id")
-    print(query)
-    query = await msg_attr.build_create_one2one(fk_id=100, fk="message_id")
-    print(query)
+    # query = msg_attr._builder.build_update_one2one(fk_id=100, fk="message_id")
+    # print(query)
+    # query = msg_attr._builder.build_create_one2one(fk_id=100, fk="message_id")
+    # print(query)
     # query = await Message.build_get_with_relations(
     #     100, fields_relation=["message_attributes_id"]
     # )

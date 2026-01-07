@@ -1,15 +1,26 @@
-import aiomysql
+"""MySQL connection pool management."""
+
 import asyncio
 import logging
 import time
 
+try:
+    import aiomysql
+except ImportError:
+    ...
 from ..abstract.types import ContainerSettings, MysqlPoolSettings
 
 
-log = logging.getLogger(__package__)
+log = logging.getLogger("dotorm")
 
 
 class ContainerMysql:
+    """
+    MySQL connection pool container.
+
+    Manages pool lifecycle.
+    """
+
     def __init__(
         self,
         pool_settings: MysqlPoolSettings,
@@ -17,12 +28,13 @@ class ContainerMysql:
     ):
         self.pool_settings = pool_settings
         self.container_settings = container_settings
+        self.pool: "aiomysql.Pool | None" = None
 
-    # РАБОТА С ПУЛОМ
-    async def create_pool(self):
+    async def create_pool(self) -> "aiomysql.Pool":
+        """Create connection pool with retry on failure."""
         try:
-            start_time: float = time.time()
-            self.pool: aiomysql.Pool = await aiomysql.create_pool(
+            start_time = time.time()
+            self.pool = await aiomysql.create_pool(
                 **self.pool_settings.model_dump(),
                 minsize=5,
                 maxsize=15,
@@ -30,21 +42,28 @@ class ContainerMysql:
                 # 15 minutes
                 pool_recycle=60 * 15,
             )
-            start_time: float = time.time()
+
             log.debug(
                 "Connection MySQL db: %s, created time: [%0.3fs]",
                 self.pool_settings.db,
                 time.time() - start_time,
             )
             return self.pool
-        except (ConnectionError, TimeoutError, aiomysql.OperationalError) as e:
-            # Если не смогли подключиться к базе пробуем переподключиться
+
+        except (ConnectionError, TimeoutError, aiomysql.OperationalError):
             log.exception(
-                "Mysql create poll connection lost, reconnect after 10 seconds: "
+                "MySQL create pool connection lost, reconnect after %d seconds",
+                self.container_settings.reconnect_timeout,
             )
             await asyncio.sleep(self.container_settings.reconnect_timeout)
-            await self.create_pool()
+            return await self.create_pool()
         except Exception as e:
-            # если ошибка не связанна с сетью, завершаем выполнение программы
-            log.exception("Mysql create poll error:")
+            log.exception("MySQL create pool error:")
             raise e
+
+    async def close_pool(self):
+        """Close connection pool."""
+        if self.pool:
+            self.pool.close()
+            await self.pool.wait_closed()
+            self.pool = None

@@ -7,7 +7,7 @@ from types import UnionType
 from typing import Any, List, Literal, Optional, Type, TypeAlias, Union
 
 
-from .fields import (
+from ..fields import (
     Many2many,
     One2many,
     Field as DotField,

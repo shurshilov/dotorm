@@ -1,7 +1,11 @@
-import asynch
 import asyncio
 import logging
 import time
+
+try:
+    import asynch
+except ImportError:
+    ...
 
 from ..abstract.types import (
     ClickhousePoolSettings,

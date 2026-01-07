@@ -1,3 +1,5 @@
+"""Abstract session interface."""
+
 from abc import ABC, abstractmethod
 
 

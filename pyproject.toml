@@ -1,0 +1,37 @@
+[project]
+name = "dotorm-tests"
+version = "1.0.0"
+description = "Tests for DotORM"
+requires-python = ">=3.12"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "asyncpg>=0.29.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+markers = [
+    "unit: Unit tests (no database required)",
+    "integration: Integration tests (requires PostgreSQL)",
+    "slow: Slow running tests",
+]
+filterwarnings = ["ignore::DeprecationWarning"]
+addopts = "-v --tb=short"
+
+[tool.coverage.run]
+source = ["dotorm"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]

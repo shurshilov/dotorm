@@ -1,9 +1,9 @@
-""" Exceptions related to orm and builder"""
+"""Exceptions related to ORM and builder."""
 
 
 class OrmConfigurationFieldException(Exception):
-    """Exception that raised when wrong config model or fields"""
+    """Exception raised when wrong config model or fields."""
 
 
 class OrmUpdateEmptyParamsException(Exception):
-    """Exception that raised when orm not have required params"""
+    """Exception raised when ORM doesn't have required params."""

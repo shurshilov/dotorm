@@ -1,19 +1,36 @@
+"""Many2many ORM operations mixin."""
+
 import asyncio
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Self
 
-from .primary import OrmPrimary
+if TYPE_CHECKING:
+    from ..protocol import DotModelProtocol
 
-from ..builder.primary import BuilderCRUDPrimary
+    _Base = DotModelProtocol
+else:
+    _Base = object
+
+from ...fields import Field, Many2many, Many2one, One2many
 
 
-from ..builder.relashions import BuilderCRUDRelashions
-from ..fields import Field, Many2many, Many2one, One2many
+class OrmMany2manyMixin(_Base):
+    """
+    Mixin providing ORM operations for many-to-many relations.
 
+    Provides:
+    - get_many2many - fetch M2M related records
+    - link_many2many - create M2M links
+    - unlink_many2many - remove M2M links
+    - _records_list_get_relation - batch load relations
 
-# BuilderCRUDPrimary, BuilderMany2many
-# для build_search_relation наледование от BuilderCRUDRelashions
-# class OrmMany2many(BuilderCRUDRelashions):
-class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
+    Expects DotModel to provide:
+    - _get_db_session()
+    - _builder
+    - _dialect
+    - get_relation_fields()
+    - prepare_list_ids()
+    """
+
     @classmethod
     async def get_many2many(
         cls,
@@ -22,7 +39,7 @@ class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
         relation,
         column1,
         column2,
-        fields=[],
+        fields=None,
         order: Literal["desc", "asc"] = "desc",
         start: int | None = None,
         end: int | None = None,
@@ -30,13 +47,17 @@ class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
         limit: int | None = 10,
         session=None,
     ):
+        if not fields:
+            fields = []
         if session is None:
             session = cls._get_db_session()
         # защита, оставить только те поля, которые действительно хранятся в базе
-        fields_store = [name for name in comodel.get_store_fields() if name in fields]
+        fields_store = [
+            name for name in comodel.get_store_fields() if name in fields
+        ]
         if not fields_store:
             fields_store = comodel.get_store_fields()
-        stmt, values = await cls.build_get_many2many(
+        stmt, values = cls._builder.build_get_many2many(
             id,
             comodel,
             relation,
@@ -49,10 +70,9 @@ class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
             sort,
             limit,
         )
-        func_prepare = comodel.prepare_list_ids
-        func_cur = "fetchall"
-
-        records = await session.execute(stmt, values, func_prepare, func_cur)
+        records = await session.execute(
+            stmt, values, prepare=comodel.prepare_list_ids
+        )
 
         # если есть хоть одна запись и вообще нужно читать поля связей
         fields_relation = [
@@ -61,56 +81,52 @@ class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
             if name in fields
         ]
         if records and fields_relation:
-            await cls._records_list_get_relation(session, fields_relation, records)
+            await cls._records_list_get_relation(
+                session, fields_relation, records
+            )
         return records
 
     @classmethod
-    async def link_many2many(cls, field: Many2many, values: list, session=None):
+    async def link_many2many(
+        cls, field: Many2many, values: list, session=None
+    ):
+        """Link records in M2M relation."""
         if session is None:
             session = cls._get_db_session()
-        # values_tuple = []
-        # for id in values:
-        #     values_tuple.append(tuple(id))
         query_placeholders = ", ".join(["%s"] * len(values[0]))
         stmt = f"""INSERT INTO {field.many2many_table}
         ({field.column2}, {field.column1})
         VALUES
         ({query_placeholders})
         """
-        #         query_placeholders = ", ".join(["%s"] * len(values_list))
-        # stmt = f"INSERT INTO {cls.__table__} ({query_columns}) VALUES ({query_placeholders})"
-        func_prepare = None
-        func_cur = "executemany"
-        record = await session.execute(stmt, [values], func_prepare, func_cur)
-        return record
+        return await session.execute(stmt, [values], cursor="executemany")
 
     @classmethod
     async def unlink_many2many(cls, field: Many2many, ids: list, session=None):
+        """Unlink records from M2M relation."""
         if session is None:
             session = cls._get_db_session()
         args: str = ",".join(["%s"] * len(ids))
         stmt = f"DELETE FROM {field.many2many_table} WHERE {field.column1} in ({args})"
-        values = ids
-        func_prepare = None
-        func_cur = "fetchall"
-
-        return await session.execute(stmt, values, func_prepare, func_cur)
+        return await session.execute(stmt, ids)
 
     @classmethod
-    async def _records_list_get_relation(cls, session, fields_relation, records):
-        dialect = "postgres"
-        if not cls._is_postgres:
-            dialect = "mysql"
+    async def _records_list_get_relation(
+        cls, session, fields_relation, records
+    ):
+        """Load relations for a list of records (batch)."""
+        # Use dialect from class
+        dialect = cls._dialect
 
-        request_list = await cls.build_search_relation(
-            fields_relation, records, dialect=dialect
+        request_list = cls._builder.build_search_relation(
+            fields_relation, records
         )
         execute_list = [
             session.execute(
-                stmt=req.stmt,
-                val=req.value,
-                func_prepare=req.function_prepare,
-                func_cur=req.function_curcor,
+                req.stmt,
+                req.value,
+                prepare=req.function_prepare,
+                cursor=req.function_cursor,
             )
             for req in request_list
         ]
@@ -121,12 +137,14 @@ class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
         # на конкретные записи (полученные при чтении store на предыдущем шаге)
         for index, result in enumerate(results):
             req = request_list[index]
+
             if isinstance(req.field, Many2one):
                 for rec in records:
                     rec_field_raw = getattr(rec, req.field_name)
                     for res_model in result:
                         if rec_field_raw == res_model.id:
                             setattr(rec, req.field_name, res_model)
+
             if isinstance(req.field, One2many):
                 for rec in records:
                     for res_model in result:
@@ -135,12 +153,12 @@ class OrmMany2many(OrmPrimary, BuilderCRUDRelashions):
                         )
                         if rec.id == res_field_id:
                             old_value = getattr(rec, req.field_name)
-                            # если еще не задано то пустой список
                             if isinstance(old_value, Field):
                                 old_value = []
                             # иначе добавляем ид в список
                             old_value.append(res_model)
                             setattr(rec, req.field_name, old_value)
+
             if isinstance(req.field, Many2many):
                 for rec in records:
                     for res_model in result:
