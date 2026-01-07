@@ -113,6 +113,8 @@ class DDLMixin(_Base):
         # готовый запрос на добавления FK
         many2one_fields_fk: list[str] = []
         many2many_fields_fk: list[str] = []
+        # запросы на создание индексов
+        index_statements: list[str] = []
 
         # Проходимся по атрибутам класса и извлекаем информацию о полях.
         for field_name, field in cls.get_fields().items():
@@ -144,6 +146,13 @@ class DDLMixin(_Base):
                             f"""ALTER TABLE IF EXISTS {cls.__table__} ADD FOREIGN KEY ({field_name}) REFERENCES "{field.relation_table.__table__}" (id) ON DELETE {field.ondelete}"""
                         )
 
+                    # создание индекса для поля с index=True
+                    if field.index and not field.primary_key and not field.unique:
+                        index_name = f"idx_{cls.__table__}_{field_name}"
+                        index_statements.append(
+                            f'CREATE INDEX IF NOT EXISTS "{index_name}" ON {cls.__table__} ("{field_name}")'
+                        )
+
                     field_declaration_str = " ".join(field_declaration)
                     fields_created_declaration.append(field_declaration_str)
                     fields_created.append([field_name, field_declaration_str])
@@ -152,9 +161,6 @@ class DDLMixin(_Base):
                 if field.relation and isinstance(field, Many2many):
                     column1 = f'"{field.column1}" INTEGER NOT NULL'
                     column2 = f'"{field.column2}" INTEGER NOT NULL'
-                    # COMMENT ON TABLE {field.many2many_table} IS f"RELATION BETWEEN {model._table} AND {comodel._table}";
-                    # CREATE INDEX ON {field.many2many_table} ({field.column1}, {field.column2});
-                    # PRIMARY KEY({field.column1}, {field.column2})
                     create_table_sql = f"""\
                     CREATE TABLE IF NOT EXISTS {field.many2many_table} (\
                     {', '.join([column1, column2])}\
@@ -168,6 +174,12 @@ class DDLMixin(_Base):
                     )
                     await session.execute(create_table_sql)
 
+                    # создание составного индекса для m2m таблицы
+                    m2m_index_name = f"idx_{field.many2many_table}_{field.column1}_{field.column2}"
+                    index_statements.append(
+                        f'CREATE INDEX IF NOT EXISTS "{m2m_index_name}" ON {field.many2many_table} ("{field.column1}", "{field.column2}")'
+                    )
+
         # Создаём SQL-запрос для создания таблицы с определёнными полями.
         create_table_sql = f"""\
 CREATE TABLE IF NOT EXISTS {cls.__table__} (\
@@ -176,6 +188,7 @@ CREATE TABLE IF NOT EXISTS {cls.__table__} (\
 
         # Выполняем SQL-запрос.
         await session.execute(create_table_sql)
+
         # если таблицы уже были созданы, но появились новые поля
         # необходимо их добавить
         for field_name, field_declaration in fields_created:
@@ -187,6 +200,11 @@ WHERE table_name='{cls.__table__}' and column_name='{field_name}';"""
                 await session.execute(
                     f"""ALTER TABLE {cls.__table__} ADD COLUMN {field_declaration};"""
                 )
+
+        # создаём индексы
+        for index_stmt in index_statements:
+            await session.execute(index_stmt)
+
         return many2one_fields_fk + many2many_fields_fk
 
     # async def __aiter__(self) -> typing.Iterator[Self]:
