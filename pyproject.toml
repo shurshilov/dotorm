@@ -1,17 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "dotorm-tests"
-version = "1.0.0"
-description = "Tests for DotORM"
+name = "dotorm"
+version = "2.0.0"
+description = "Async Python ORM for PostgreSQL, MySQL and ClickHouse with dot-notation access"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "shurshilov", email = "shurshilov.a@yandex.ru"}
+]
+keywords = ["orm", "async", "postgresql", "mysql", "clickhouse", "database", "asyncio"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: AsyncIO",
+    "Topic :: Database",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 requires-python = ">=3.12"
 
+# Базовые зависимости (опциональные драйверы)
+dependencies = []
+
 [project.optional-dependencies]
-test = [
+postgres = ["asyncpg>=0.29.0"]
+mysql = ["aiomysql>=0.2.0"]
+clickhouse = ["asynch>=0.2.0"]
+pydantic = ["pydantic>=2.0.0", "pydantic-settings>=2.0.0"]
+all = [
+    "asyncpg>=0.29.0",
+    "aiomysql>=0.2.0",
+    "asynch>=0.2.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+]
+dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-    "asyncpg>=0.29.0",
+    "ruff>=0.4.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/shurshilov/dotorm"
+Repository = "https://github.com/shurshilov/dotorm"
+Issues = "https://github.com/shurshilov/dotorm/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["dotorm"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/dotorm",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
