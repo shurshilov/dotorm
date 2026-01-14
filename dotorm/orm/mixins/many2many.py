@@ -11,6 +11,7 @@ else:
     _Base = object
 
 from ...fields import Field, Many2many, Many2one, One2many
+from ...decorators import hybridmethod
 
 
 class OrmMany2manyMixin(_Base):
@@ -49,8 +50,7 @@ class OrmMany2manyMixin(_Base):
     ):
         if not fields:
             fields = []
-        if session is None:
-            session = cls._get_db_session()
+        session = cls._get_db_session(session)
         # защита, оставить только те поля, которые действительно хранятся в базе
         fields_store = [
             name for name in comodel.get_store_fields() if name in fields
@@ -86,13 +86,13 @@ class OrmMany2manyMixin(_Base):
             )
         return records
 
-    @classmethod
+    @hybridmethod
     async def link_many2many(
-        cls, field: Many2many, values: list, session=None
+        self, field: Many2many, values: list, session=None
     ):
         """Link records in M2M relation."""
-        if session is None:
-            session = cls._get_db_session()
+        cls = self.__class__
+        session = cls._get_db_session(session)
         query_placeholders = ", ".join(["%s"] * len(values[0]))
         stmt = f"""INSERT INTO {field.many2many_table}
         ({field.column2}, {field.column1})
@@ -104,8 +104,7 @@ class OrmMany2manyMixin(_Base):
     @classmethod
     async def unlink_many2many(cls, field: Many2many, ids: list, session=None):
         """Unlink records from M2M relation."""
-        if session is None:
-            session = cls._get_db_session()
+        session = cls._get_db_session(session)
         args: str = ",".join(["%s"] * len(ids))
         stmt = f"DELETE FROM {field.many2many_table} WHERE {field.column1} in ({args})"
         return await session.execute(stmt, ids)

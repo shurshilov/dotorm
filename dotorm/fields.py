@@ -370,6 +370,74 @@ class AttachmentOne2many[T: "DotModel"](Field[list[T]]):
         super().__init__(**kwargs)
 
 
+# class Many2manyAccessor[T: "DotModel"]:
+#     """
+#     Accessor для работы с M2M полем на экземпляре модели.
+
+#     Позволяет использовать удобный синтаксис:
+#         await chat.member_ids.link([user1_id, user2_id])
+#         await chat.member_ids.unlink([user_id])
+
+#     Вместо:
+#         await chat.link_many2many(field=Chat.member_ids, values=[[chat.id, user_id]])
+#     """
+
+#     __slots__ = ("_instance", "_field", "_data")
+
+#     def __init__(
+#         self,
+#         instance: "DotModel",
+#         field: "Many2many[T]",
+#         data: list[T] | None = None,
+#     ):
+#         self._instance = instance
+#         self._field = field
+#         self._data = data
+
+#     async def link(self, ids: list[int], session=None):
+#         """
+#         Добавить связи M2M.
+
+#         Args:
+#             ids: Список ID записей для связывания
+#             session: Сессия БД
+
+#         Example:
+#             await chat.member_ids.link([user1_id, user2_id])
+#         """
+#         values = [[self._instance.id, id] for id in ids]
+#         return await self._instance.link_many2many(
+#             self._field, values, session
+#         )
+
+#     async def unlink(self, ids: list[int], session=None):
+#         """
+#         Удалить связи M2M.
+
+#         Args:
+#             ids: Список ID записей для отвязывания
+#             session: Сессия БД
+
+#         Example:
+#             await chat.member_ids.unlink([user_id])
+#         """
+#         return await self._instance.unlink_many2many(self._field, ids, session)
+
+#     # Поддержка итерации по загруженным данным
+#     def __iter__(self):
+#         if self._data is None:
+#             return iter([])
+#         return iter(self._data)
+
+#     def __len__(self):
+#         if self._data is None:
+#             return 0
+#         return len(self._data)
+
+#     def __bool__(self):
+#         return self._data is not None and len(self._data) > 0
+
+
 class Many2many[T: "DotModel"](Field[list[T]]):
     """Many-to-many relation field."""
 
@@ -392,6 +460,20 @@ class Many2many[T: "DotModel"](Field[list[T]]):
         self.column1: str = column1
         self.column2 = column2
         super().__init__(**kwargs)
+
+    # def __get__(
+    #     self, instance: "DotModel | None", owner: type
+    # ) -> "Many2many[T] | Many2manyAccessor[T]":
+    #     if instance is None:
+    #         # Доступ через класс — возвращаем дескриптор (для get_fields и т.д.)
+    #         return self
+    #     # Доступ через экземпляр — возвращаем accessor
+    #     # Получаем данные если они были загружены в __dict__
+    #     data = instance.__dict__.get(self._field_name)
+    #     return Many2manyAccessor(instance, self, data)
+
+    # def __set_name__(self, owner: type, name: str):
+    #     self._field_name = name
 
 
 class One2many[T: "DotModel"](Field[list[T]]):

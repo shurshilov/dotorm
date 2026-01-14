@@ -7,7 +7,8 @@ from .session import (
     NoTransactionSession,
     NoTransactionNoPoolSession,
 )
-from .transaction import ContainerTransaction
+from .transaction import ContainerTransaction, get_current_session
+from ..abstract.dialect import CursorType, PostgresDialect
 
 __all__ = [
     "ContainerPostgres",
@@ -16,4 +17,7 @@ __all__ = [
     "NoTransactionSession",
     "NoTransactionNoPoolSession",
     "ContainerTransaction",
+    "get_current_session",
+    "CursorType",
+    "PostgresDialect",
 ]

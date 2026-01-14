@@ -1,14 +1,20 @@
 """Relations ORM operations mixin."""
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Literal, Self
+from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
+
+from ...decorators import hybridmethod
 
 if TYPE_CHECKING:
     from ..protocol import DotModelProtocol
+    from ...model import DotModel
 
     _Base = DotModelProtocol
 else:
     _Base = object
+
+# TypeVar for generic payload - accepts any DotModel subclass
+_M = TypeVar("_M", bound="DotModel")
 
 from ...builder.request_builder import (
     FilterExpression,
@@ -46,9 +52,9 @@ class OrmRelationsMixin(_Base):
     - update()
     """
 
-    @classmethod
+    @hybridmethod
     async def search(
-        cls,
+        self,
         fields: list[str] = ["id"],
         start: int | None = None,
         end: int | None = None,
@@ -59,8 +65,8 @@ class OrmRelationsMixin(_Base):
         raw: bool = False,
         session=None,
     ) -> list[Self]:
-        if session is None:
-            session = cls._get_db_session()
+        cls = self.__class__
+        session = cls._get_db_session(session)
 
         # Use dialect from class
         dialect = cls._dialect
@@ -69,7 +75,9 @@ class OrmRelationsMixin(_Base):
             fields, start, end, limit, order, sort, filter
         )
         prepare = cls.prepare_list_ids if not raw else None
-        records: list[Self] = await session.execute(stmt, values, prepare=prepare)
+        records: list[Self] = await session.execute(
+            stmt, values, prepare=prepare
+        )
 
         # если есть хоть одна запись и вообще нужно читать поля связей
         fields_relation = [
@@ -95,8 +103,7 @@ class OrmRelationsMixin(_Base):
         """Get record with relations loaded."""
         if not fields:
             fields = []
-        if session is None:
-            session = cls._get_db_session()
+        session = cls._get_db_session(session)
 
         dialect = cls._dialect
 
@@ -306,11 +313,10 @@ class OrmRelationsMixin(_Base):
         return record
 
     async def update_with_relations(
-        self, payload: Self, fields=[], session=None
+        self, payload: _M, fields=[], session=None
     ):
         """Update record with relations."""
-        if session is None:
-            session = self._get_db_session()
+        session = self._get_db_session(session)
 
         # Handle attachments
         fields_attachments = [
@@ -328,8 +334,10 @@ class OrmRelationsMixin(_Base):
                         # также надо продумать механизм обновления уже существующего файла
                         # надо ли? или проще удалять
                         field_obj["res_id"] = self.id
+                        # Оборачиваем dict в объект модели
+                        attachment_payload = field.relation_table(**field_obj)
                         attachment_id = await field.relation_table.create(
-                            field_obj, session
+                            attachment_payload, session
                         )
                         setattr(payload, name, attachment_id)
 

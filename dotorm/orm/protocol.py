@@ -38,7 +38,7 @@ class DotModelProtocol(Protocol):
 
     # Session
     @classmethod
-    def _get_db_session(cls) -> Any: ...
+    def _get_db_session(cls, session=None) -> Any: ...
 
     # Field introspection
     @classmethod

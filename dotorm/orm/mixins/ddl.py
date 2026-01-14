@@ -103,8 +103,7 @@ class DDLMixin(_Base):
     @classmethod
     async def __create_table__(cls, session=None):
         """Метод для создания таблицы в базе данных, основанной на атрибутах класса."""
-        if session is None:
-            session = cls._get_db_session()
+        session = cls._get_db_session(session)
 
         # описание поля для создания в бд со всеми аттрибутами
         fields_created_declaration: list[str] = []
@@ -147,7 +146,11 @@ class DDLMixin(_Base):
                         )
 
                     # создание индекса для поля с index=True
-                    if field.index and not field.primary_key and not field.unique:
+                    if (
+                        field.index
+                        and not field.primary_key
+                        and not field.unique
+                    ):
                         index_name = f"idx_{cls.__table__}_{field_name}"
                         index_statements.append(
                             f'CREATE INDEX IF NOT EXISTS "{index_name}" ON {cls.__table__} ("{field_name}")'
@@ -196,7 +199,8 @@ CREATE TABLE IF NOT EXISTS {cls.__table__} (\
 WHERE table_name='{cls.__table__}' and column_name='{field_name}';"""
 
             field_exist = await session.execute(sql)
-            if field_exist == "SELECT 0":
+            # field_exist будет пустым списком [] если колонки нет
+            if not field_exist:
                 await session.execute(
                     f"""ALTER TABLE {cls.__table__} ADD COLUMN {field_declaration};"""
                 )

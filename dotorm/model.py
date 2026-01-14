@@ -15,6 +15,7 @@ from typing import (
     dataclass_transform,
 )
 
+
 from .components.dialect import POSTGRES, Dialect
 
 if TYPE_CHECKING:
@@ -22,13 +23,20 @@ if TYPE_CHECKING:
     import aiomysql
     import asyncpg
 
+    # import asynch
 
-from .databases.mysql.session import (
-    NoTransactionSession as MysqlNoTransactionSession,
-)
+
+# from .databases.mysql.session import (
+#     NoTransactionSession as MysqlNoTransactionSession,
+# )
 from .databases.postgres.session import (
     NoTransactionSession as PostgresNoTransactionSession,
 )
+
+# from .databases.clickhouse.session import (
+#     NoTransactionSession as ClickhouseNoTransactionSession,
+# )
+
 from .fields import (
     AttachmentOne2many,
     Field,
@@ -45,6 +53,7 @@ class JsonMode(IntEnum):
     FORM = 1
     LIST = 2
     CREATE = 3
+    UPDATE = 4
 
 
 def depends(*field_names: str) -> Callable[[Callable], Callable]:
@@ -122,14 +131,13 @@ class DotModel(
     __database__: ClassVar[str]
     # pool of connections to database
     # use for default usage in orm (without explicit set)
-    _pool: ClassVar[Union["aiomysql.Pool", "asyncpg.Pool"]]
+    _pool: ClassVar["asyncpg.Pool | None"]
     # class that implement no transaction execute
     # single connection -> execute -> release connection to pool
     # use for default usage in orm (without explicit set)
-    # _no_transaction: ClassVar[
-    #     Type[MysqlNoTransactionSession | PostgresNoTransactionSession]
-    # ]
-    _no_transaction: ClassVar[Type]
+    _no_transaction: Type[PostgresNoTransactionSession] = (
+        PostgresNoTransactionSession
+    )
     # base validation schema for routers endpoints
     # __schema__: ClassVar[Type]
     __schema__: ClassVar[Annotated]
@@ -233,7 +241,26 @@ class DotModel(
     #                         setattr(self, f"_{field_name}_computed", False)
 
     @classmethod
-    def _get_db_session(cls):
+    def _get_db_session(cls, session=None):
+        """
+        Получить сессию БД.
+
+        Приоритет:
+        1. Явно переданная session
+        2. Сессия из контекста транзакции (contextvars)
+        3. NoTransaction сессия (автокоммит)
+        """
+        if session is not None:
+            return session
+
+        # Проверяем контекст транзакции
+        from .databases.postgres.transaction import get_current_session
+
+        ctx_session = get_current_session()
+        if ctx_session is not None:
+            return ctx_session
+
+        # Fallback на NoTransaction
         return cls._no_transaction(cls._pool)
 
     @classmethod
@@ -272,12 +299,45 @@ class DotModel(
 
     @classmethod
     def get_fields(cls) -> dict[str, Field]:
-        """Основная функция, которая возвращает все поля модели."""
+        """Возвращает только собственные поля класса (без унаследованных).
+
+        Для получения всех полей включая унаследованные используйте get_all_fields().
+        """
         return {
             attr_name: attr
             for attr_name, attr in cls.__dict__.items()
             if isinstance(attr, Field)
         }
+
+    @classmethod
+    def get_all_fields(cls) -> dict[str, Field]:
+        """
+        Возвращает все поля модели, включая унаследованные из миксинов и родительских классов.
+
+        Использует MRO (Method Resolution Order) для сбора полей из всей цепочки наследования.
+        Поля из дочерних классов переопределяют поля из родительских.
+
+        Returns:
+            dict[str, Field]: Словарь {имя_поля: объект_Field}
+
+        Example:
+            class AuditMixin:
+                created_at = Datetime()
+
+            class Lead(AuditMixin, DotModel):
+                name = Char()
+
+            Lead.get_all_fields()  # {'created_at': Datetime, 'name': Char}
+            Lead.get_fields()      # {'name': Char}  - только собственные
+        """
+        fields = {}
+        for klass in reversed(cls.__mro__):
+            if klass is object:
+                continue
+            for attr_name, attr in klass.__dict__.items():
+                if isinstance(attr, Field):
+                    fields[attr_name] = attr
+        return fields
 
     @classmethod
     def get_compute_fields(cls):
@@ -521,7 +581,7 @@ class DotModel(
                     }
                 elif mode == JsonMode.FORM:
                     fields_json[field_name] = field.json()
-                elif mode == JsonMode.CREATE:
+                elif mode == JsonMode.CREATE or mode == JsonMode.UPDATE:
                     fields_json[field_name] = field.id
 
             # ЗАДАНО как many2many или one2many

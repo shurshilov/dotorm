@@ -1,9 +1,10 @@
 """Primary ORM operations mixin."""
 
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, TypeVar
 
 if TYPE_CHECKING:
     from ..protocol import DotModelProtocol
+    from ...model import DotModel
 
     _Base = DotModelProtocol
 else:
@@ -11,6 +12,11 @@ else:
 
 from ...components.dialect import POSTGRES
 from ...model import JsonMode
+from ...decorators import hybridmethod
+
+
+# TypeVar for generic payload - accepts any DotModel subclass
+_M = TypeVar("_M", bound="DotModel")
 
 
 class OrmPrimaryMixin(_Base):
@@ -32,26 +38,24 @@ class OrmPrimaryMixin(_Base):
     """
 
     async def delete(self, session=None):
-        if session is None:
-            session = self._get_db_session()
+        session = self._get_db_session(session)
         stmt = self._builder.build_delete()
         return await session.execute(stmt, [self.id])
 
-    @classmethod
-    async def delete_bulk(cls, ids: list[int], session=None):
-        if session is None:
-            session = cls._get_db_session()
+    @hybridmethod
+    async def delete_bulk(self, ids: list[int], session=None):
+        cls = self.__class__
+        session = cls._get_db_session(session)
         stmt = cls._builder.build_delete_bulk(len(ids))
         return await session.execute(stmt, ids)
 
     async def update(
         self,
-        payload: Self | None = None,
+        payload: "_M | None" = None,
         fields=None,
         session=None,
     ):
-        if session is None:
-            session = self._get_db_session()
+        session = self._get_db_session(session)
         if payload is None:
             payload = self
         if not fields:
@@ -63,6 +67,7 @@ class OrmPrimaryMixin(_Base):
                 include=set(fields),
                 exclude_none=True,
                 only_store=True,
+                mode=JsonMode.UPDATE,
             )
         else:
             payload_dict = payload.json(
@@ -70,20 +75,21 @@ class OrmPrimaryMixin(_Base):
                 exclude_none=True,
                 exclude_unset=True,
                 only_store=True,
+                mode=JsonMode.UPDATE,
             )
 
         stmt, values = self._builder.build_update(payload_dict, self.id)
         return await session.execute(stmt, values)
 
-    @classmethod
+    @hybridmethod
     async def update_bulk(
-        cls,
+        self,
         ids: list[int],
-        payload: Self,
+        payload: _M,
         session=None,
     ):
-        if session is None:
-            session = cls._get_db_session()
+        cls = self.__class__
+        session = cls._get_db_session(session)
 
         # Сериализация в ORM слое
         payload_dict = payload.json(
@@ -96,10 +102,10 @@ class OrmPrimaryMixin(_Base):
         stmt, values = cls._builder.build_update_bulk(payload_dict, ids)
         return await session.execute(stmt, values)
 
-    @classmethod
-    async def create(cls, payload: Self, session=None):
-        if session is None:
-            session = cls._get_db_session()
+    @hybridmethod
+    async def create(self, payload: _M, session=None) -> int:
+        cls = self.__class__
+        session = cls._get_db_session(session)
 
         # Сериализация в ORM слое
         payload_dict = payload.json(
@@ -123,10 +129,10 @@ class OrmPrimaryMixin(_Base):
         assert record is not None
         return record
 
-    @classmethod
-    async def create_bulk(cls, payload: list[Self], session=None):
-        if session is None:
-            session = cls._get_db_session()
+    @hybridmethod
+    async def create_bulk(self, payload: list[_M], session=None):
+        cls = self.__class__
+        session = cls._get_db_session(session)
 
         # Исключаем primary_key поля
         exclude_fields = {
@@ -151,12 +157,10 @@ class OrmPrimaryMixin(_Base):
         records = await session.execute(stmt, values, cursor="fetch")
         return records
 
-    @classmethod
-    async def get(
-        cls, id, fields: list[str] = [], session=None
-    ) -> Self | None:
-        if session is None:
-            session = cls._get_db_session()
+    @hybridmethod
+    async def get(self, id, fields: list[str] = [], session=None) -> Self:
+        cls = self.__class__
+        session = cls._get_db_session(session)
 
         stmt, values = cls._builder.build_get(id, fields)
         record = await session.execute(
@@ -164,14 +168,15 @@ class OrmPrimaryMixin(_Base):
         )
 
         if not record:
-            return None
+            # return None
+            raise ValueError("Record not found")
         assert isinstance(record, cls)
         return record
 
-    @classmethod
-    async def table_len(cls, session=None) -> int:
-        if session is None:
-            session = cls._get_db_session()
+    @hybridmethod
+    async def table_len(self, session=None) -> int:
+        cls = self.__class__
+        session = cls._get_db_session(session)
         stmt, values = cls._builder.build_table_len()
 
         # Use dialect for column name

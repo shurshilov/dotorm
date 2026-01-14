@@ -1,28 +1,78 @@
 """PostgreSQL session implementations."""
 
-from typing import Any, Callable
+from typing import Any, Callable, TYPE_CHECKING
 
 from ..abstract.types import PostgresPoolSettings
 from ..abstract.session import SessionAbstract
+from ..abstract.dialect import PostgresDialect, CursorType
 
 
-try:
+if TYPE_CHECKING:
     import asyncpg
     from asyncpg.transaction import Transaction
-except ImportError:
-    asyncpg = None  # type: ignore
-    Transaction = None  # type: ignore
 
 
-class PostgresSession(SessionAbstract): ...
+# Shared dialect instance
+_dialect = PostgresDialect()
+
+
+class PostgresSession(SessionAbstract):
+    """Base PostgreSQL session."""
+
+    @staticmethod
+    async def _do_execute(
+        conn: "asyncpg.Connection",
+        stmt: str,
+        values: Any,
+        cursor: CursorType,
+    ) -> Any:
+        """
+        Execute query on connection (shared logic).
+
+        Args:
+            conn: asyncpg connection
+            stmt: SQL with $1, $2... placeholders (already converted)
+            values: Query values
+            cursor: Cursor type
+
+        Returns:
+            Raw result from asyncpg
+        """
+        # executemany
+        if cursor == "executemany":
+            if not values:
+                raise ValueError("executemany requires values")
+            # Handle [[v1, v2], [v3, v4]] or [[[v1, v2], [v3, v4]]] format
+            rows = (
+                values[0]
+                if isinstance(values[0], list)
+                and values[0]
+                and isinstance(values[0][0], (list, tuple))
+                else values
+            )
+            for row in rows:
+                await conn.execute(stmt, *row)
+            return None
+
+        # void - execute only (INSERT/UPDATE/DELETE without return)
+        if cursor == "void":
+            if values:
+                await conn.execute(stmt, *values)
+            else:
+                await conn.execute(stmt)
+            return None
+
+        # fetch operations
+        method = getattr(conn, _dialect.get_cursor_method(cursor))
+        if values:
+            return await method(stmt, *values)
+        return await method(stmt)
 
 
 class TransactionSession(PostgresSession):
     """
     Session for transactional queries.
-
-    Works in single connection without closing it.
-    Used in transaction context manager.
+    Uses single connection within transaction context.
     """
 
     def __init__(
@@ -37,54 +87,21 @@ class TransactionSession(PostgresSession):
         values: Any = None,
         *,
         prepare: Callable | None = None,
-        cursor: str = "fetchall",
+        cursor: CursorType = "fetchall",
     ) -> Any:
-        # Заменить %s на $1...$n dollar-numberic
-        counter = 1
-        while "%s" in stmt:
-            stmt = stmt.replace("%s", "$" + str(counter), 1)
-            counter += 1
+        stmt = _dialect.convert_placeholders(stmt)
+        result = await self._do_execute(self.connection, stmt, values, cursor)
+        result = _dialect.convert_result(result, cursor)
 
-        rows_dict = []
-        if cursor is None:
-            if values:
-                rows = await self.connection.execute(stmt, *values)
-            else:
-                rows = await self.connection.execute(stmt)
-        else:
-            if values:
-                rows = await self.connection.fetch(stmt, *values)
-            else:
-                rows = await self.connection.fetch(stmt)
-            for rec in rows:
-                rows_dict.append(dict(rec))
-
-        if prepare:
-            return prepare(rows_dict)
-        return rows_dict or rows
-
-    async def fetch(
-        self,
-        stmt: str,
-        values: Any = None,
-        *,
-        prepare: Callable | None = None,
-    ) -> Any:
-        if values:
-            rows = await self.connection.fetch(stmt, values)
-        else:
-            rows = await self.connection.fetch(stmt)
-
-        if prepare:
-            return prepare(rows)
-        return rows
+        if prepare and result:
+            return prepare(result)
+        return result
 
 
 class NoTransactionSession(PostgresSession):
     """
     Session for non-transactional queries.
-
-    Acquires connection from pool, executes query, releases back to pool.
+    Acquires connection from pool per query.
     """
 
     default_pool: "asyncpg.Pool | None" = None
@@ -102,49 +119,38 @@ class NoTransactionSession(PostgresSession):
         values: Any = None,
         *,
         prepare: Callable | None = None,
-        cursor: str = "fetchall",
+        cursor: CursorType = "fetchall",
     ) -> Any:
+        stmt = _dialect.convert_placeholders(stmt)
+
         async with self.pool.acquire() as conn:
-            # Заменить %s на $1...$n dollar-numberic
-            counter = 1
-            while "%s" in stmt:
-                stmt = stmt.replace("%s", "$" + str(counter), 1)
-                counter += 1
+            result = await self._do_execute(conn, stmt, values, cursor)
+            result = _dialect.convert_result(result, cursor)
 
-            rows_dict = []
-            if cursor is None:
-                if values:
-                    rows = await conn.execute(stmt, *values)
-                else:
-                    rows = await conn.execute(stmt)
-            else:
-                # asyncpg использует fetch вместо fetchall
-                cursor_method = "fetch" if cursor == "fetchall" else cursor
-                if values:
-                    rows = await getattr(conn, cursor_method)(stmt, *values)
-                else:
-                    rows = await getattr(conn, cursor_method)(stmt)
-                if rows:
-                    for rec in rows:
-                        rows_dict.append(dict(rec))
-
-            if prepare and rows_dict:
-                return prepare(rows_dict)
-            return rows_dict or rows
+            if prepare and result:
+                return prepare(result)
+            return result
 
 
 class NoTransactionNoPoolSession(PostgresSession):
     """
     Session without pool.
-
-    Opens single connection, executes query, closes connection.
-    Used for administrative tasks like creating databases.
+    Opens connection, executes, closes. For admin tasks.
     """
+
+    @classmethod
+    async def get_connection(
+        cls, settings: PostgresPoolSettings
+    ) -> "asyncpg.Connection":
+        """Create new connection without pool."""
+        import asyncpg
+
+        return await asyncpg.connect(**settings.model_dump())
 
     @classmethod
     async def execute(
         cls,
-        settings,
+        settings: PostgresPoolSettings,
         stmt: str,
         values: Any = None,
         *,
@@ -153,20 +159,16 @@ class NoTransactionNoPoolSession(PostgresSession):
     ) -> Any:
         conn = await cls.get_connection(settings)
 
-        if values:
-            await conn.execute(stmt, values)
-        else:
-            await conn.execute(stmt)
+        try:
+            if values:
+                await conn.execute(stmt, values)
+            else:
+                await conn.execute(stmt)
 
-        rows = await getattr(conn, cursor)()
-        await conn.close()
-        if prepare:
-            return prepare(rows)
-        return rows
+            rows = await getattr(conn, cursor)()
 
-    @classmethod
-    async def get_connection(cls, settings: PostgresPoolSettings):
-        conn: "asyncpg.Connection" = await asyncpg.connect(
-            **settings.model_dump()
-        )
-        return conn
+            if prepare:
+                return prepare(rows)
+            return rows
+        finally:
+            await conn.close()
