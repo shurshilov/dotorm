@@ -102,7 +102,16 @@ class DDLMixin(_Base):
 
     @classmethod
     async def __create_table__(cls, session=None):
-        """Метод для создания таблицы в базе данных, основанной на атрибутах класса."""
+        """Метод для создания таблицы в базе данных, основанной на атрибутах класса.
+
+        Если __auto_create__ = False, пропускает создание таблицы.
+        Это полезно для связующих таблиц many2many, которые создаются
+        автоматически при создании основной модели.
+        """
+        # Проверяем флаг __auto_create__
+        if not cls.__auto_create__:
+            return []
+
         session = cls._get_db_session(session)
 
         # описание поля для создания в бд со всеми аттрибутами
@@ -162,6 +171,7 @@ class DDLMixin(_Base):
 
                 # создаем промежуточную таблицу для many2many
                 if field.relation and isinstance(field, Many2many):
+                    # id_column = '"id" SERIAL PRIMARY KEY'
                     column1 = f'"{field.column1}" INTEGER NOT NULL'
                     column2 = f'"{field.column2}" INTEGER NOT NULL'
                     create_table_sql = f"""\

@@ -29,6 +29,7 @@ class DotModelProtocol(Protocol):
     """
 
     __table__: ClassVar[str]
+    __auto_create__: ClassVar[bool] = True
     _pool: ClassVar[Union["aiomysql.Pool", "asyncpg.Pool"]]
     _no_transaction: ClassVar[Type]
     _dialect: ClassVar["Dialect"]

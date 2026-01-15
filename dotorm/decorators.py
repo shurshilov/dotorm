@@ -2,6 +2,7 @@
 Декораторы для DotORM моделей - улучшенная версия.
 
 @hybridmethod - декоратор для гибридных методов (работают И как classmethod И как instance).
+@onchange - декоратор для обработчиков изменения полей.
 @model - декоратор для бизнес-методов модели.
 
 Эта версия улучшает типизацию через:
@@ -293,4 +294,72 @@ class hybridmethod(Generic[_T, _P, _R]):
 
 
 # Экспортируем декораторы
-__all__ = ["hybridmethod"]
+__all__ = ["hybridmethod", "onchange"]
+
+
+def onchange(*fields: str):
+    """
+    Декоратор для регистрации обработчиков изменения полей.
+
+    При изменении указанных полей на фронтенде
+    вызывается декорированный метод, который может вернуть значения для
+    обновления других полей формы.
+
+    Примеры использования:
+        ```python
+        from backend.base.system.dotorm.dotorm.decorators import onchange
+
+        class ChatConnector(DotModel):
+
+            @onchange('type')
+            async def _onchange_type(self) -> dict:
+                '''Вызывается при изменении поля type'''
+                if self.type == 'telegram':
+                    return {
+                        'connector_url': 'https://api.telegram.org',
+                        'category': 'messenger',
+                    }
+                return {}
+
+            @onchange('category', 'type')
+            async def _onchange_category_type(self) -> dict:
+                '''Вызывается при изменении category или type'''
+                # self содержит текущие значения формы
+                return {'name': f'{self.category} - {self.type}'}
+        ```
+
+    Поведение:
+        - Метод должен быть async
+        - self заполняется текущими значениями формы
+        - Метод возвращает dict с полями для обновления
+        - Пустой dict {} означает "ничего не менять"
+        - Цепочки onchange НЕ поддерживаются (если onchange меняет поле
+          у которого тоже есть onchange, второй НЕ вызывается)
+
+    Args:
+        *fields: Имена полей, при изменении которых вызывать обработчик
+
+    Returns:
+        Декоратор функции
+    """
+
+    def decorator(func: Callable[..., Coroutine[Any, Any, dict]]):
+        # Помечаем функцию как onchange обработчик
+        func._onchange_fields = fields
+        func._is_onchange = True
+
+        @functools.wraps(func)
+        async def wrapper(self, *args, **kwargs) -> dict:
+            result = await func(self, *args, **kwargs)
+            # Гарантируем что результат - словарь
+            if result is None:
+                return {}
+            return result
+
+        # Переносим метаданные на wrapper
+        wrapper._onchange_fields = fields
+        wrapper._is_onchange = True
+
+        return wrapper
+
+    return decorator

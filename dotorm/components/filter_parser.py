@@ -115,6 +115,14 @@ class FilterParser:
                 return clause, ("%" + str(value) + "%",)
 
             elif op in ("=", "!=", ">", "<", ">=", "<="):
+                # None -> IS NULL / IS NOT NULL
+                if value is None:
+                    if op == "=":
+                        return f"{field} IS NULL", ()
+                    elif op == "!=":
+                        return f"{field} IS NOT NULL", ()
+                    else:
+                        raise ValueError(f"Operator '{op}' cannot be used with None")
                 clause = f"{field} {op} %s"
                 return clause, (value,)
 

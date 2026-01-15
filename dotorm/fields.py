@@ -208,7 +208,91 @@ class Char(Field[str]):
         return "VARCHAR"
 
 
-class Selection(Char): ...
+class Selection(Char):
+    """
+    Selection field - выбор из списка опций.
+    
+    Хранится как VARCHAR, но имеет ограниченный набор допустимых значений.
+    
+    Поддерживает расширение через @extend с selection_add:
+    
+        # Базовая модель
+        class ChatConnector(DotModel):
+            __table__ = "chat_connector"
+            type = Selection(
+                options=[("internal", "Internal")],
+                default="internal",
+            )
+        
+        # Расширение из другого модуля
+        @extend(ChatConnector)
+        class ChatConnectorTelegramMixin:
+            type = Selection(selection_add=[("telegram", "Telegram")])
+    
+    Args:
+        options: Список кортежей (value, label) - базовые опции
+        selection_add: Дополнительные опции для расширения существующего поля
+        default: Значение по умолчанию
+        required: Обязательное поле
+    """
+    
+    def __init__(
+        self,
+        options: list[tuple[str, str]] | None = None,
+        selection_add: list[tuple[str, str]] | None = None,
+        **kwargs
+    ):
+        # Базовые опции
+        self._base_options: list[tuple[str, str]] = options or []
+        # Опции добавленные через selection_add (из @extend)
+        self._added_options: list[tuple[str, str]] = []
+        # selection_add при инициализации (для @extend)
+        self._selection_add = selection_add
+        
+        # Для Char нужен max_length
+        if "max_length" not in kwargs:
+            kwargs["max_length"] = 64
+        
+        super().__init__(**kwargs)
+    
+    @property
+    def options(self) -> list[tuple[str, str]]:
+        """Все опции включая добавленные через extend."""
+        return self._base_options + self._added_options
+    
+    @options.setter
+    def options(self, value: list[tuple[str, str]]):
+        """Установить базовые опции."""
+        self._base_options = value or []
+    
+    def add_options(self, new_options: list[tuple[str, str]]) -> None:
+        """
+        Добавить опции к полю.
+        
+        Используется системой расширений (@extend) для добавления
+        новых значений в Selection поле.
+        
+        Args:
+            new_options: Список кортежей (value, label)
+        """
+        for opt in new_options:
+            if opt not in self._base_options and opt not in self._added_options:
+                self._added_options.append(opt)
+    
+    def get_values(self) -> list[str]:
+        """Получить список допустимых значений (без labels)."""
+        return [opt[0] for opt in self.options]
+    
+    def get_label(self, value: str) -> str | None:
+        """Получить label для значения."""
+        for opt_value, opt_label in self.options:
+            if opt_value == value:
+                return opt_label
+        return None
+    
+    def is_selection_add(self) -> bool:
+        """Проверить является ли это расширением (selection_add)."""
+        return self._selection_add is not None
 
 
 class Text(Field[str]):

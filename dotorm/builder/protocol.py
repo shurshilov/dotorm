@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 from ..components.filter_parser import FilterExpression
 
 if TYPE_CHECKING:
-    from ..orm.model import DotModel
+    from ..model import DotModel
     from ..fields import Field
     from ..components.dialect import Dialect
     from ..components.filter_parser import FilterParser

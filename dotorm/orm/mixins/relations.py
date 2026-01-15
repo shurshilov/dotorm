@@ -36,6 +36,8 @@ class OrmRelationsMixin(_Base):
 
     Provides:
     - search - search records with relation loading
+    - search_count - count records matching filter
+    - exists - have one record or not
     - get_with_relations - get single record with relations
     - update_with_relations - update record with relations
 
@@ -92,6 +94,58 @@ class OrmRelationsMixin(_Base):
 
         return records
 
+    @hybridmethod
+    async def search_count(
+        self,
+        filter: FilterExpression | None = None,
+        session=None,
+    ) -> int:
+        """
+        Count records matching the filter.
+
+        Args:
+            filter: Filter expression
+            session: Database session
+
+        Returns:
+            Number of matching records
+        """
+        cls = self.__class__
+        session = cls._get_db_session(session)
+
+        stmt, values = cls._builder.build_search_count(filter)
+        result = await session.execute(stmt, values)
+
+        if result and len(result) > 0:
+            return result[0].get("count", 0)
+        return 0
+
+    @hybridmethod
+    async def exists(
+        self,
+        filter: FilterExpression | None = None,
+        session=None,
+    ) -> bool:
+        """
+        Check if any record matches the filter.
+
+        More efficient than search_count for existence checks.
+
+        Args:
+            filter: Filter expression
+            session: Database session
+
+        Returns:
+            True if at least one record exists
+        """
+        cls = self.__class__
+        session = cls._get_db_session(session)
+
+        stmt, values = cls._builder.build_exists(filter)
+        result = await session.execute(stmt, values)
+
+        return bool(result)
+
     @classmethod
     async def get_with_relations(
         cls,
@@ -99,7 +153,7 @@ class OrmRelationsMixin(_Base):
         fields=None,
         fields_info={},
         session=None,
-    ) -> Self | None:
+    ) -> Self:
         """Get record with relations loaded."""
         if not fields:
             fields = []
@@ -120,7 +174,7 @@ class OrmRelationsMixin(_Base):
         stmt, values = cls._builder.build_get(id, fields_store)
         record_raw: list[Any] = await session.execute(stmt, values)
         if not record_raw:
-            return None
+            raise ValueError("Record not found")
         record = cls(**record_raw[0])
 
         # защита, оставить только те поля, которые являются отношениями (m2m, o2m, m2o)

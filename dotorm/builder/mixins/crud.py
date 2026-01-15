@@ -161,7 +161,8 @@ class CRUDMixin:
         if order_upper not in _ALLOWED_ORDER:
             raise ValueError(f"Invalid order: {order}")
         if sort not in store_fields:
-            raise ValueError(f"Invalid sort field: {sort}")
+            sort = store_fields[0]
+            # raise ValueError(f"Invalid sort field: {sort}")
 
         fields_store_stmt = ", ".join(
             f"{escape}{name}{escape}"
@@ -195,3 +196,51 @@ class CRUDMixin:
             val = where_values + val
 
         return stmt, val
+
+    def build_search_count(
+        self: "BuilderProtocol",
+        filter: FilterExpression | None = None,
+    ) -> tuple[str, tuple]:
+        """
+        Build COUNT query with filter.
+
+        Args:
+            filter: Filter expression
+
+        Returns:
+            Tuple of (query, values)
+        """
+        where = ""
+        where_values: tuple = ()
+
+        if filter:
+            where_clause, where_values = self.filter_parser.parse(filter)
+            where = f"WHERE {where_clause}"
+
+        stmt = f"SELECT COUNT(*) as count FROM {self.table} {where}"
+
+        return stmt, where_values
+
+    def build_exists(
+        self: "BuilderProtocol",
+        filter: FilterExpression | None = None,
+    ) -> tuple[str, tuple]:
+        """
+        Build EXISTS query with filter.
+
+        Args:
+            filter: Filter expression
+
+        Returns:
+            Tuple of (query, values)
+        """
+        where = ""
+        where_values: tuple = ()
+
+        if filter:
+            where_clause, where_values = self.filter_parser.parse(filter)
+            where = f"WHERE {where_clause}"
+
+        stmt = f"SELECT 1 FROM {self.table} {where} LIMIT 1"
+
+        return stmt, where_values

@@ -123,6 +123,8 @@ class DotModel(
     # class variables (it is intended to be shared by all instances)
     # name of table in database
     __table__: ClassVar[str]
+    # create table in db
+    __auto_create__: ClassVar[bool] = True
     # path name for route ednpoints CRUD
     __route__: ClassVar[str]
     # create CRUD endpoints automaticaly or not
@@ -565,8 +567,12 @@ class DotModel(
                 # то ничего не делать
                 if not exclude_unset:
                     # иначе взять значение по умолчанию или None
-                    if not field.default is None:
-                        fields_json[field_name] = field.default
+                    if field.default is not None:
+                        # если default - callable (лямбда или функция), вызываем её
+                        if callable(field.default):
+                            fields_json[field_name] = field.default()
+                        else:
+                            fields_json[field_name] = field.default
                     else:
                         fields_json[field_name] = None
 
@@ -594,7 +600,7 @@ class DotModel(
                             "id": rec.id,
                             "name": rec.name or str(rec.id),
                         }
-                        for rec in field
+                        for rec in field["data"]
                     ]
                 elif mode == JsonMode.FORM:
                     # TODO: тут надо оставить только те поля которые есть в текущий момент
@@ -645,6 +651,74 @@ class DotModel(
         if exclude_none:
             record = {k: v for k, v in record.items() if v is not None}
         return record
+
+    @classmethod
+    def get_onchange_fields(cls) -> list[str]:
+        """
+        Получить список полей у которых есть onchange обработчики.
+
+        Используется фронтендом для определения за какими полями следить.
+
+        Returns:
+            Список имён полей с onchange обработчиками
+        """
+        fields_with_onchange = set()
+
+        for attr_name in dir(cls):
+            if attr_name.startswith("_"):
+                attr = getattr(cls, attr_name, None)
+                if attr and callable(attr) and hasattr(attr, "_is_onchange"):
+                    onchange_fields = getattr(attr, "_onchange_fields", ())
+                    fields_with_onchange.update(onchange_fields)
+
+        return list(fields_with_onchange)
+
+    @classmethod
+    def _get_onchange_handlers(cls, field_name: str) -> list[str]:
+        """
+        Получить список методов-обработчиков для указанного поля.
+
+        Args:
+            field_name: Имя поля
+
+        Returns:
+            Список имён методов-обработчиков
+        """
+        handlers = []
+
+        for attr_name in dir(cls):
+            if attr_name.startswith("_"):
+                attr = getattr(cls, attr_name, None)
+                if attr and callable(attr) and hasattr(attr, "_is_onchange"):
+                    onchange_fields = getattr(attr, "_onchange_fields", ())
+                    if field_name in onchange_fields:
+                        handlers.append(attr_name)
+
+        return handlers
+
+    async def execute_onchange(self, field_name: str) -> dict:
+        """
+        Выполнить все onchange обработчики для указанного поля.
+
+        Перед вызовом self должен быть заполнен текущими значениями формы.
+
+        Args:
+            field_name: Имя изменённого поля
+
+        Returns:
+            Объединённый dict со значениями для обновления формы
+        """
+        result = {}
+        handlers = self._get_onchange_handlers(field_name)
+
+        for handler_name in handlers:
+            handler = getattr(self, handler_name, None)
+            if handler and callable(handler):
+                handler_result = await handler()
+                if handler_result:
+                    result.update(handler_result)
+
+        return result
 
 
 # Backward compatibility alias
