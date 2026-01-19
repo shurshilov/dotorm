@@ -122,7 +122,9 @@ class FilterParser:
                     elif op == "!=":
                         return f"{field} IS NOT NULL", ()
                     else:
-                        raise ValueError(f"Operator '{op}' cannot be used with None")
+                        raise ValueError(
+                            f"Operator '{op}' cannot be used with None"
+                        )
                 clause = f"{field} {op} %s"
                 return clause, (value,)
 

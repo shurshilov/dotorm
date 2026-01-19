@@ -14,13 +14,6 @@ from ..fields import (
     One2many,
 )
 
-# Re-export from components for backward compatibility
-from ..components.filter_parser import (
-    FilterExpression,
-    FilterTriplet,
-    SQLOperator,
-)
-
 
 class FetchMode(Enum):
     """Database cursor fetch mode."""

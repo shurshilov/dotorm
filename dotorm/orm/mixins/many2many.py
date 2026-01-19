@@ -12,6 +12,7 @@ else:
 
 from ...fields import Field, Many2many, Many2one, One2many
 from ...decorators import hybridmethod
+from ..utils import execute_maybe_parallel
 
 
 class OrmMany2manyMixin(_Base):
@@ -129,8 +130,8 @@ class OrmMany2manyMixin(_Base):
             )
             for req in request_list
         ]
-        # если один из запросов с ошибкой сразу прекратить выполнение и выкинуть ошибку
-        results = await asyncio.gather(*execute_list)
+        # выполняем последовательно в транзакции, параллельно вне транзакции
+        results = await execute_maybe_parallel(execute_list)
 
         # маппинг (полученных оптимизированных запросов) полей связей
         # на конкретные записи (полученные при чтении store на предыдущем шаге)

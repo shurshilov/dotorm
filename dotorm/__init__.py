@@ -29,7 +29,7 @@ from .fields import (
 
 # Model
 from .model import DotModel
-from .model import Model, JsonMode, depends
+from .model import Model, JsonMode
 
 # Components
 from .components import (
@@ -46,7 +46,7 @@ from .exceptions import (
     OrmUpdateEmptyParamsException,
 )
 
-__version__ = "2.0.7"
+__version__ = "2.0.8"
 
 __all__ = [
     # Fields
@@ -75,7 +75,6 @@ __all__ = [
     "DotModel",
     "Model",
     "JsonMode",
-    "depends",
     # Components
     "Dialect",
     "POSTGRES",

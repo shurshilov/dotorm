@@ -34,6 +34,11 @@ class Field[FieldType]:
         relation - Is this a relation field?
         relation_table - Related model class
         relation_table_field - Field name in related model
+
+        schema_required - Override required status in API schema validation
+                         True = required in schema (even if nullable)
+                         False = optional in schema (even if not nullable)
+                         None = auto-detect from type annotation
     """
 
     # DB attributes
@@ -46,6 +51,7 @@ class Field[FieldType]:
 
     # ORM attributes
     required: bool | None = None
+    schema_required: bool | None = None
     sql_type: str
     indexable: bool = True
     store: bool = True
@@ -62,6 +68,9 @@ class Field[FieldType]:
     _relation_table: "DotModel | None" = None
 
     def __init__(self, **kwargs: Any) -> None:
+        # schema_required - переопределяет обязательность в API схеме
+        self.schema_required = kwargs.pop("schema_required", None)
+
         # добавляем поле required для удобства работы
         # которое переопределяет null
         self.required = kwargs.pop("required", None)
@@ -74,13 +83,6 @@ class Field[FieldType]:
         # self.compute_deps: Set[str] = kwargs.pop("compute_deps", set())
         self.indexable = kwargs.pop("indexable", self.indexable)
         self.store = kwargs.pop("store", self.store)
-        # self.primary_key = kwargs.pop("primary_key", False)
-        # self.null = kwargs.pop("null", True)
-        # self.unique = kwargs.pop("unique", False)
-        # self.description = kwargs.pop("description", None)
-        # self.default = kwargs.pop("default", None)
-        # self.ondelete = "restrict" if self.required else "set null"
-        # self.ondelete = kwargs.pop("null", self.null)
         self.ondelete = (
             "set null" if kwargs.pop("null", self.null) else "restrict"
         )
@@ -211,11 +213,11 @@ class Char(Field[str]):
 class Selection(Char):
     """
     Selection field - выбор из списка опций.
-    
+
     Хранится как VARCHAR, но имеет ограниченный набор допустимых значений.
-    
+
     Поддерживает расширение через @extend с selection_add:
-    
+
         # Базовая модель
         class ChatConnector(DotModel):
             __table__ = "chat_connector"
@@ -223,24 +225,24 @@ class Selection(Char):
                 options=[("internal", "Internal")],
                 default="internal",
             )
-        
+
         # Расширение из другого модуля
         @extend(ChatConnector)
         class ChatConnectorTelegramMixin:
             type = Selection(selection_add=[("telegram", "Telegram")])
-    
+
     Args:
         options: Список кортежей (value, label) - базовые опции
         selection_add: Дополнительные опции для расширения существующего поля
         default: Значение по умолчанию
         required: Обязательное поле
     """
-    
+
     def __init__(
         self,
         options: list[tuple[str, str]] | None = None,
         selection_add: list[tuple[str, str]] | None = None,
-        **kwargs
+        **kwargs,
     ):
         # Базовые опции
         self._base_options: list[tuple[str, str]] = options or []
@@ -248,48 +250,51 @@ class Selection(Char):
         self._added_options: list[tuple[str, str]] = []
         # selection_add при инициализации (для @extend)
         self._selection_add = selection_add
-        
+
         # Для Char нужен max_length
         if "max_length" not in kwargs:
             kwargs["max_length"] = 64
-        
+
         super().__init__(**kwargs)
-    
+
     @property
     def options(self) -> list[tuple[str, str]]:
         """Все опции включая добавленные через extend."""
         return self._base_options + self._added_options
-    
+
     @options.setter
     def options(self, value: list[tuple[str, str]]):
         """Установить базовые опции."""
         self._base_options = value or []
-    
+
     def add_options(self, new_options: list[tuple[str, str]]) -> None:
         """
         Добавить опции к полю.
-        
+
         Используется системой расширений (@extend) для добавления
         новых значений в Selection поле.
-        
+
         Args:
             new_options: Список кортежей (value, label)
         """
         for opt in new_options:
-            if opt not in self._base_options and opt not in self._added_options:
+            if (
+                opt not in self._base_options
+                and opt not in self._added_options
+            ):
                 self._added_options.append(opt)
-    
+
     def get_values(self) -> list[str]:
         """Получить список допустимых значений (без labels)."""
         return [opt[0] for opt in self.options]
-    
+
     def get_label(self, value: str) -> str | None:
         """Получить label для значения."""
         for opt_value, opt_label in self.options:
             if opt_value == value:
                 return opt_label
         return None
-    
+
     def is_selection_add(self) -> bool:
         """Проверить является ли это расширением (selection_add)."""
         return self._selection_add is not None

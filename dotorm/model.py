@@ -4,15 +4,19 @@ from abc import ABCMeta
 import asyncio
 from enum import IntEnum
 import json
+from types import UnionType
 from typing import (
     TYPE_CHECKING,
     Annotated,
     Any,
+    Awaitable,
     Callable,
     ClassVar,
     Type,
     Union,
     dataclass_transform,
+    get_origin,
+    get_args,
 )
 
 
@@ -54,20 +58,7 @@ class JsonMode(IntEnum):
     LIST = 2
     CREATE = 3
     UPDATE = 4
-
-
-def depends(*field_names: str) -> Callable[[Callable], Callable]:
-    """
-    Декоратор для вычисляемых полей.
-    Указывает, от каких полей зависит вычисление.
-    Поддерживает вложенные зависимости.
-    """
-
-    def decorator(func: Callable) -> Callable:
-        func.compute_deps = set(field_names)
-        return func
-
-    return decorator
+    NESTED_LIST = 5  # Для вложенных записей внутри FORM
 
 
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
@@ -79,6 +70,7 @@ from .orm.mixins.ddl import DDLMixin
 from .orm.mixins.primary import OrmPrimaryMixin
 from .orm.mixins.many2many import OrmMany2manyMixin
 from .orm.mixins.relations import OrmRelationsMixin
+from .orm.mixins.access import AccessMixin
 
 
 class DotModel(
@@ -86,6 +78,7 @@ class DotModel(
     OrmRelationsMixin,
     OrmMany2manyMixin,
     OrmPrimaryMixin,
+    AccessMixin,
     metaclass=ModelMetaclass,
 ):
     """
@@ -435,22 +428,8 @@ class DotModel(
         """
         default_values = {}
         for name, field in cls.get_fields().items():
-            if field.default is not None:
-                if callable(field.default):
-                    # если корутина то сделать авейт
-                    if asyncio.iscoroutinefunction(field.default):
-                        res = await field.default()
-                        default_values.update({name: res})
-                    # иначе просто вызов
-                    else:
-                        default_values.update({name: field.default()})
-                else:
-                    default_values.update({name: field.default})
-
-            elif isinstance(field, (One2many, Many2many)):
-                # значение по умолчанию для m2m и o2m
-                # если с клиента передан список вложенных полей,
-                # то установить значение по умолчанию
+            # Для One2many и Many2many всегда возвращаем структуру x2m_default
+            if isinstance(field, (One2many, Many2many)):
                 fields_nested = fields_client_nested.get(name)
                 if fields_nested:
                     fields_info = field.relation_table.get_fields_info_list(
@@ -462,6 +441,18 @@ class DotModel(
                         "total": 0,
                     }
                     default_values.update({name: x2m_default})
+
+            elif field.default is not None:
+                if callable(field.default):
+                    # если корутина то сделать авейт
+                    if asyncio.iscoroutinefunction(field.default):
+                        res = await field.default()
+                        default_values.update({name: res})
+                    # иначе просто вызов
+                    else:
+                        default_values.update({name: field.default()})
+                else:
+                    default_values.update({name: field.default})
 
         return default_values
 
@@ -484,11 +475,75 @@ class DotModel(
         }
 
     @classmethod
+    def _is_field_required(cls, field_name: str, field: Field) -> bool:
+        """
+        Определяет, является ли поле обязательным для API схемы.
+
+        Приоритет:
+        1. schema_required (если задан) — явное переопределение для схемы
+        2. Primary key — всегда необязателен (автогенерация)
+        3. required (если задан) — общая обязательность
+        4. Аннотация типа — автоопределение
+
+        Args:
+            field_name: Имя поля
+            field: Объект Field
+
+        Returns:
+            True если поле обязательно в схеме, False иначе
+        """
+        # 1. schema_required имеет высший приоритет для схемы
+        if field.schema_required is not None:
+            return field.schema_required
+
+        # 2. Primary key не требует ввода от пользователя
+        if field.primary_key:
+            return False
+
+        # 3. Проверяем явно заданный атрибут required
+        if field.required is not None:
+            return field.required
+
+        # 4. Проверяем аннотацию типа
+        annotations = getattr(cls, "__annotations__", {})
+        if field_name not in annotations:
+            # Если аннотации нет, смотрим на null из поля
+            return not field.null
+
+        py_type = annotations[field_name]
+
+        # Строковая аннотация: "Model | None"
+        if isinstance(py_type, str):
+            if "None" in py_type:
+                return False
+            # Проверяем на list в строке
+            if py_type.startswith("list[") or py_type.startswith("List["):
+                return False
+            return True
+
+        origin = get_origin(py_type)
+
+        # Списки не обязательны (One2many, Many2many)
+        if origin is list:
+            return False
+
+        # Union тип: проверяем наличие None
+        if origin is UnionType or origin is Union:
+            args = get_args(py_type)
+            if type(None) in args:
+                return False
+            return True
+
+        # Простой тип без None - обязателен
+        return True
+
+    @classmethod
     def get_fields_info_list(cls, fields_list: list[str]):
         """Get field info for list view."""
         fields_info = []
         for name, field in cls.get_fields().items():
             if name in fields_list:
+                required = cls._is_field_required(name, field)
                 if field.relation:
                     fields_info.append(
                         {
@@ -499,6 +554,7 @@ class DotModel(
                                 if field.relation_table
                                 else ""
                             ),
+                            "required": required,
                         }
                     )
                 else:
@@ -507,6 +563,7 @@ class DotModel(
                             "name": name,
                             "type": field.__class__.__name__,
                             "options": field.options or [],
+                            "required": required,
                         }
                     )
         return fields_info
@@ -517,6 +574,7 @@ class DotModel(
         fields_info = []
         for name, field in cls.get_fields().items():
             if name in fields_list:
+                required = cls._is_field_required(name, field)
                 if field.relation:
                     fields_info.append(
                         {
@@ -528,6 +586,7 @@ class DotModel(
                                 else ""
                             ),
                             "relatedField": (field.relation_table_field or ""),
+                            "required": required,
                         }
                     )
                 else:
@@ -536,6 +595,7 @@ class DotModel(
                             "name": name,
                             "type": field.__class__.__name__,
                             "options": field.options or [],
+                            "required": required,
                         }
                     )
         return fields_info
@@ -595,6 +655,16 @@ class DotModel(
                 field_class, (Many2many, One2many, AttachmentOne2many)
             ):
                 if mode == JsonMode.LIST:
+                    # При search: field это list
+                    fields_json[field_name] = [
+                        {
+                            "id": rec.id,
+                            "name": rec.name or str(rec.id),
+                        }
+                        for rec in field
+                    ]
+                elif mode == JsonMode.NESTED_LIST:
+                    # Вложенная сериализация из FORM: field это dict с data
                     fields_json[field_name] = [
                         {
                             "id": rec.id,
@@ -603,9 +673,12 @@ class DotModel(
                         for rec in field["data"]
                     ]
                 elif mode == JsonMode.FORM:
-                    # TODO: тут надо оставить только те поля которые есть в текущий момент
+                    # При FORM (get) field это dict с data/fields/total
                     fields_json[field_name] = {
-                        "data": [rec.json() for rec in field["data"]],
+                        "data": [
+                            rec.json(mode=JsonMode.NESTED_LIST)
+                            for rec in field["data"]
+                        ],
                         "fields": field["fields"],
                         "total": field["total"],
                     }
@@ -665,11 +738,13 @@ class DotModel(
         fields_with_onchange = set()
 
         for attr_name in dir(cls):
-            if attr_name.startswith("_"):
-                attr = getattr(cls, attr_name, None)
-                if attr and callable(attr) and hasattr(attr, "_is_onchange"):
-                    onchange_fields = getattr(attr, "_onchange_fields", ())
-                    fields_with_onchange.update(onchange_fields)
+            # Пропускаем dunder методы
+            if attr_name.startswith("__"):
+                continue
+            attr = getattr(cls, attr_name, None)
+            if attr and callable(attr) and hasattr(attr, "_is_onchange"):
+                onchange_fields = getattr(attr, "_onchange_fields", ())
+                fields_with_onchange.update(onchange_fields)
 
         return list(fields_with_onchange)
 
@@ -687,12 +762,14 @@ class DotModel(
         handlers = []
 
         for attr_name in dir(cls):
-            if attr_name.startswith("_"):
-                attr = getattr(cls, attr_name, None)
-                if attr and callable(attr) and hasattr(attr, "_is_onchange"):
-                    onchange_fields = getattr(attr, "_onchange_fields", ())
-                    if field_name in onchange_fields:
-                        handlers.append(attr_name)
+            # Пропускаем dunder методы
+            if attr_name.startswith("__"):
+                continue
+            attr = getattr(cls, attr_name, None)
+            if attr and callable(attr) and hasattr(attr, "_is_onchange"):
+                onchange_fields = getattr(attr, "_onchange_fields", ())
+                if field_name in onchange_fields:
+                    handlers.append(attr_name)
 
         return handlers
 
@@ -712,7 +789,7 @@ class DotModel(
         handlers = self._get_onchange_handlers(field_name)
 
         for handler_name in handlers:
-            handler = getattr(self, handler_name, None)
+            handler: Awaitable | None = getattr(self, handler_name, None)
             if handler and callable(handler):
                 handler_result = await handler()
                 if handler_result:

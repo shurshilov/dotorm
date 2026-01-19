@@ -2,6 +2,11 @@
 
 from typing import TYPE_CHECKING, Self, TypeVar
 
+from ...access import Operation
+from ...components.dialect import POSTGRES
+from ...model import JsonMode
+from ...decorators import hybridmethod
+
 if TYPE_CHECKING:
     from ..protocol import DotModelProtocol
     from ...model import DotModel
@@ -9,10 +14,6 @@ if TYPE_CHECKING:
     _Base = DotModelProtocol
 else:
     _Base = object
-
-from ...components.dialect import POSTGRES
-from ...model import JsonMode
-from ...decorators import hybridmethod
 
 
 # TypeVar for generic payload - accepts any DotModel subclass
@@ -38,6 +39,8 @@ class OrmPrimaryMixin(_Base):
     """
 
     async def delete(self, session=None):
+        await self._check_access(Operation.DELETE, record_ids=[self.id])
+
         session = self._get_db_session(session)
         stmt = self._builder.build_delete()
         return await session.execute(stmt, [self.id])
@@ -45,6 +48,10 @@ class OrmPrimaryMixin(_Base):
     @hybridmethod
     async def delete_bulk(self, ids: list[int], session=None):
         cls = self.__class__
+
+        # Одна проверка для всех ID
+        await cls._check_access(Operation.DELETE, record_ids=ids)
+
         session = cls._get_db_session(session)
         stmt = cls._builder.build_delete_bulk(len(ids))
         return await session.execute(stmt, ids)
@@ -55,13 +62,14 @@ class OrmPrimaryMixin(_Base):
         fields=None,
         session=None,
     ):
+        await self._check_access(Operation.UPDATE, record_ids=[self.id])
+
         session = self._get_db_session(session)
         if payload is None:
             payload = self
         if not fields:
             fields = []
 
-        # Сериализация в ORM слое, а не в Builder
         if fields:
             payload_dict = payload.json(
                 include=set(fields),
@@ -89,9 +97,12 @@ class OrmPrimaryMixin(_Base):
         session=None,
     ):
         cls = self.__class__
+
+        # Одна проверка для всех ID
+        await cls._check_access(Operation.UPDATE, record_ids=ids)
+
         session = cls._get_db_session(session)
 
-        # Сериализация в ORM слое
         payload_dict = payload.json(
             exclude=payload.get_none_update_fields_set(),
             exclude_none=True,
@@ -105,9 +116,12 @@ class OrmPrimaryMixin(_Base):
     @hybridmethod
     async def create(self, payload: _M, session=None) -> int:
         cls = self.__class__
+
+        # Проверяем table access до создания
+        await cls._check_access(Operation.CREATE)
+
         session = cls._get_db_session(session)
 
-        # Сериализация в ORM слое
         payload_dict = payload.json(
             exclude=payload.get_none_update_fields_set(),
             exclude_none=True,
@@ -117,31 +131,36 @@ class OrmPrimaryMixin(_Base):
 
         stmt, values = cls._builder.build_create(payload_dict)
 
-        # Use dialect instead of _is_postgres
         if cls._dialect.supports_returning:
             stmt += " RETURNING id"
             record = await session.execute(stmt, values, cursor="fetch")
             assert record is not None
-            return record[0]["id"]
+            record_id = record[0]["id"]
+        else:
+            record = await session.execute(stmt, values, cursor="lastrowid")
+            assert record is not None
+            record_id = record
 
-        # TODO: создание relations полей
-        record = await session.execute(stmt, values, cursor="lastrowid")
-        assert record is not None
-        return record
+        # Проверяем row access после создания (для Rules типа "только свои записи")
+        await cls._check_access(Operation.CREATE, record_ids=[record_id])
+
+        return record_id
 
     @hybridmethod
     async def create_bulk(self, payload: list[_M], session=None):
         cls = self.__class__
+
+        # Проверяем table access до создания
+        await cls._check_access(Operation.CREATE)
+
         session = cls._get_db_session(session)
 
-        # Исключаем primary_key поля
         exclude_fields = {
             name
             for name, field in cls.get_fields().items()
             if field.primary_key
         }
 
-        # Сериализация
         payloads_dicts = [
             p.json(
                 exclude=exclude_fields, only_store=True, mode=JsonMode.CREATE
@@ -155,11 +174,20 @@ class OrmPrimaryMixin(_Base):
             stmt += " RETURNING id"
 
         records = await session.execute(stmt, values, cursor="fetch")
+
+        # Проверяем row access после создания
+        if records:
+            created_ids = [r["id"] for r in records]
+            await cls._check_access(Operation.CREATE, record_ids=created_ids)
+
         return records
 
     @hybridmethod
     async def get(self, id, fields: list[str] = [], session=None) -> Self:
         cls = self.__class__
+
+        await cls._check_access(Operation.READ, record_ids=[id])
+
         session = cls._get_db_session(session)
 
         stmt, values = cls._builder.build_get(id, fields)
@@ -168,7 +196,6 @@ class OrmPrimaryMixin(_Base):
         )
 
         if not record:
-            # return None
             raise ValueError("Record not found")
         assert isinstance(record, cls)
         return record
@@ -179,7 +206,6 @@ class OrmPrimaryMixin(_Base):
         session = cls._get_db_session(session)
         stmt, values = cls._builder.build_table_len()
 
-        # Use dialect for column name
         if cls._dialect == POSTGRES:
             prepare = lambda rows: [r["count"] for r in rows]
         else:

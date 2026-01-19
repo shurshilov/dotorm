@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from ..builder.builder import Builder
     from ..components.dialect import Dialect
     from ..fields import Field
+    from ..access import Operation
     import aiomysql
     import asyncpg
 
@@ -40,6 +41,15 @@ class DotModelProtocol(Protocol):
     # Session
     @classmethod
     def _get_db_session(cls, session=None) -> Any: ...
+
+    # Access control (from AccessMixin)
+    @classmethod
+    async def _check_access(
+        cls,
+        operation: "Operation",
+        record_ids: list[int] | None = None,
+        filter: list | None = None,
+    ) -> list | None: ...
 
     # Field introspection
     @classmethod

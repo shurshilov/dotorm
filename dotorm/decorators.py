@@ -178,6 +178,20 @@ class hybridmethod(Generic[_T, _P, _R]):
         return self.func(*args, **kwargs)
 
 
+def depends(*field_names: str) -> Callable[[Callable], Callable]:
+    """
+    Декоратор для вычисляемых полей.
+    Указывает, от каких полей зависит вычисление.
+    Поддерживает вложенные зависимости.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        func.compute_deps = set(field_names)
+        return func
+
+    return decorator
+
+
 # def model(
 #     func: Callable[Concatenate[_T, _P], Coroutine[Any, Any, _R]],
 # ) -> Callable[Concatenate[_T, _P], Coroutine[Any, Any, _R]]:
@@ -357,8 +371,8 @@ def onchange(*fields: str):
             return result
 
         # Переносим метаданные на wrapper
-        wrapper._onchange_fields = fields
-        wrapper._is_onchange = True
+        wrapper._onchange_fields = fields  # type: ignore
+        wrapper._is_onchange = True  # type: ignore
 
         return wrapper
 

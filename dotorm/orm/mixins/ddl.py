@@ -107,6 +107,9 @@ class DDLMixin(_Base):
         Если __auto_create__ = False, пропускает создание таблицы.
         Это полезно для связующих таблиц many2many, которые создаются
         автоматически при создании основной модели.
+
+        Returns:
+            list[tuple[str, str]]: Список кортежей (fk_name, fk_sql) для создания FK
         """
         # Проверяем флаг __auto_create__
         if not cls.__auto_create__:
@@ -118,9 +121,9 @@ class DDLMixin(_Base):
         fields_created_declaration: list[str] = []
         # только текстовые названия полей
         fields_created: list = []
-        # готовый запрос на добавления FK
-        many2one_fields_fk: list[str] = []
-        many2many_fields_fk: list[str] = []
+        # готовый запрос на добавления FK: список кортежей (fk_name, fk_sql)
+        many2one_fields_fk: list[tuple[str, str]] = []
+        many2many_fields_fk: list[tuple[str, str]] = []
         # запросы на создание индексов
         index_statements: list[str] = []
 
@@ -148,11 +151,16 @@ class DDLMixin(_Base):
                             )
 
                     if isinstance(field, Many2one):
-                        # не забыть создать FK для many2one
-                        # ALTER TABLE %s ADD FOREIGN KEY (%s) REFERENCES %s(%s) ON DELETE %s",
-                        many2one_fields_fk.append(
-                            f"""ALTER TABLE IF EXISTS {cls.__table__} ADD FOREIGN KEY ({field_name}) REFERENCES "{field.relation_table.__table__}" (id) ON DELETE {field.ondelete}"""
+                        # FK с именованным CONSTRAINT
+                        fk_name = f"fk_{cls.__table__}_{field_name}"
+                        fk_sql = (
+                            f'ALTER TABLE IF EXISTS "{cls.__table__}" '
+                            f'ADD CONSTRAINT "{fk_name}" '
+                            f'FOREIGN KEY ("{field_name}") '
+                            f'REFERENCES "{field.relation_table.__table__}" (id) '
+                            f"ON DELETE {field.ondelete}"
                         )
+                        many2one_fields_fk.append((fk_name, fk_sql))
 
                     # создание индекса для поля с index=True
                     if (
@@ -162,7 +170,7 @@ class DDLMixin(_Base):
                     ):
                         index_name = f"idx_{cls.__table__}_{field_name}"
                         index_statements.append(
-                            f'CREATE INDEX IF NOT EXISTS "{index_name}" ON {cls.__table__} ("{field_name}")'
+                            f'CREATE INDEX IF NOT EXISTS "{index_name}" ON "{cls.__table__}" ("{field_name}")'
                         )
 
                     field_declaration_str = " ".join(field_declaration)
@@ -171,48 +179,68 @@ class DDLMixin(_Base):
 
                 # создаем промежуточную таблицу для many2many
                 if field.relation and isinstance(field, Many2many):
-                    # id_column = '"id" SERIAL PRIMARY KEY'
                     column1 = f'"{field.column1}" INTEGER NOT NULL'
                     column2 = f'"{field.column2}" INTEGER NOT NULL'
                     create_table_sql = f"""\
-                    CREATE TABLE IF NOT EXISTS {field.many2many_table} (\
+                    CREATE TABLE IF NOT EXISTS "{field.many2many_table}" (\
                     {', '.join([column1, column2])}\
                     );
                     """
-                    many2many_fields_fk.append(
-                        f"""ALTER TABLE IF EXISTS "{field.many2many_table}" ADD FOREIGN KEY ({field.column2}) REFERENCES {cls.__table__} (id) ON DELETE {field.ondelete}"""
+
+                    # FK с именованными CONSTRAINT
+                    fk_name1 = f"fk_{field.many2many_table}_{field.column2}"
+                    fk_sql1 = (
+                        f'ALTER TABLE IF EXISTS "{field.many2many_table}" '
+                        f'ADD CONSTRAINT "{fk_name1}" '
+                        f'FOREIGN KEY ("{field.column2}") '
+                        f'REFERENCES "{cls.__table__}" (id) '
+                        f"ON DELETE {field.ondelete}"
                     )
-                    many2many_fields_fk.append(
-                        f"""ALTER TABLE IF EXISTS "{field.many2many_table}" ADD FOREIGN KEY ({field.column1}) REFERENCES "{field.relation_table.__table__}" (id) ON DELETE {field.ondelete}"""
+
+                    fk_name2 = f"fk_{field.many2many_table}_{field.column1}"
+                    fk_sql2 = (
+                        f'ALTER TABLE IF EXISTS "{field.many2many_table}" '
+                        f'ADD CONSTRAINT "{fk_name2}" '
+                        f'FOREIGN KEY ("{field.column1}") '
+                        f'REFERENCES "{field.relation_table.__table__}" (id) '
+                        f"ON DELETE {field.ondelete}"
                     )
+
+                    many2many_fields_fk.append((fk_name1, fk_sql1))
+                    many2many_fields_fk.append((fk_name2, fk_sql2))
                     await session.execute(create_table_sql)
 
                     # создание составного индекса для m2m таблицы
                     m2m_index_name = f"idx_{field.many2many_table}_{field.column1}_{field.column2}"
                     index_statements.append(
-                        f'CREATE INDEX IF NOT EXISTS "{m2m_index_name}" ON {field.many2many_table} ("{field.column1}", "{field.column2}")'
+                        f'CREATE INDEX IF NOT EXISTS "{m2m_index_name}" ON "{field.many2many_table}" ("{field.column1}", "{field.column2}")'
                     )
 
         # Создаём SQL-запрос для создания таблицы с определёнными полями.
         create_table_sql = f"""\
-CREATE TABLE IF NOT EXISTS {cls.__table__} (\
+CREATE TABLE IF NOT EXISTS "{cls.__table__}" (\
 {', '.join(fields_created_declaration)}\
 );"""
 
         # Выполняем SQL-запрос.
         await session.execute(create_table_sql)
 
-        # если таблицы уже были созданы, но появились новые поля
-        # необходимо их добавить
-        for field_name, field_declaration in fields_created:
-            sql = f"""SELECT column_name FROM information_schema.columns
-WHERE table_name='{cls.__table__}' and column_name='{field_name}';"""
+        # ОПТИМИЗАЦИЯ: получаем все колонки таблицы ОДНИМ запросом
+        existing_columns_sql = f"""
+            SELECT column_name 
+            FROM information_schema.columns
+            WHERE table_name = '{cls.__table__}'
+        """
+        existing_columns_result = await session.execute(existing_columns_sql)
+        existing_columns = {
+            row["column_name"] for row in existing_columns_result
+        }
 
-            field_exist = await session.execute(sql)
-            # field_exist будет пустым списком [] если колонки нет
-            if not field_exist:
+        # Добавляем только отсутствующие колонки
+        for field_name, field_declaration in fields_created:
+            if field_name not in existing_columns:
                 await session.execute(
-                    f"""ALTER TABLE {cls.__table__} ADD COLUMN {field_declaration};"""
+                    f'ALTER TABLE "{cls.__table__}" ADD COLUMN {field_declaration};'
                 )
 
         # создаём индексы
@@ -220,9 +248,3 @@ WHERE table_name='{cls.__table__}' and column_name='{field_name}';"""
             await session.execute(index_stmt)
 
         return many2one_fields_fk + many2many_fields_fk
-
-    # async def __aiter__(self) -> typing.Iterator[Self]:
-    #     """ Return an iterator over ``self``. """
-    #     recs = await self.search()
-    #     for rec in recs:
-    #         yield rec

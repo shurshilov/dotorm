@@ -1,6 +1,6 @@
 try:
     from pydantic import create_model, ConfigDict
-    from pydantic.fields import FieldInfo, Field
+    from pydantic.fields import Field
 except:
     print("pydantic lib not installed")
 from types import UnionType
@@ -35,7 +35,8 @@ def dotorm_to_pydantic_nested_one(cls):
                 SchemaGetFieldRelationInput = create_model(
                     "SchemaGetFieldRelationInput",
                     **params,
-                )  # type: ignore
+                    # field_name=(list[Literal[*allowed_fields]], ...),
+                )
                 fields_relation.append(SchemaGetFieldRelationInput)
 
     return create_model(
@@ -225,10 +226,9 @@ def generate_pydantic_models(
             final_type = convert_field_type(py_type, field_value, known_models)
 
             if isinstance(field_value, DotField):
-                if not field_value.null:
-                    required = Ellipsis
-                else:
-                    required = None
+                # Используем метод модели для определения обязательности
+                is_required = cls._is_field_required(name, field_value)
+                required = Ellipsis if is_required else None
 
                 # если есть значение по умолчанию
                 if field_value.default is not None:

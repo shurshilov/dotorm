@@ -57,6 +57,12 @@ class ContainerPostgres:
             )
             return self.pool
         except (
+            asyncpg.InvalidCatalogNameError,
+            asyncpg.ConnectionDoesNotExistError,
+        ):
+            # БД не существует — пробрасываем наверх для создания
+            raise
+        except (
             ConnectionError,
             TimeoutError,
             asyncpg.exceptions.ConnectionFailureError,
@@ -99,7 +105,7 @@ class ContainerPostgres:
         Args:
             models: List of DotModel classes
         """
-        stmt_foreign_keys = []
+        stmt_foreign_keys: list[tuple[str, str]] = []
 
         async with ContainerTransaction(self.pool) as session:
             # создаем модели в БД, без FK
@@ -107,11 +113,21 @@ class ContainerPostgres:
                 foreign_keys = await model.__create_table__(session)
                 stmt_foreign_keys += foreign_keys
 
-            # создаем внешние ключи, для ссылочной целостности
-            # на поля many2one а также на колонки полей many2many
-            for stmt_foreign_key in stmt_foreign_keys:
-                try:
-                    await session.execute(stmt_foreign_key)
-                except asyncpg.exceptions.DuplicateObjectError:
-                    # FK already exists
-                    pass
+            if not stmt_foreign_keys:
+                return
+
+            # Дедупликация по имени FK (M2M таблицы могут дублироваться)
+            unique_fks = {
+                fk_name: fk_sql for fk_name, fk_sql in stmt_foreign_keys
+            }
+
+            # Получаем существующие FK одним запросом
+            existing_fk_result = await session.execute(
+                "SELECT conname FROM pg_constraint WHERE contype = 'f'"
+            )
+            existing_fk_names = {row["conname"] for row in existing_fk_result}
+
+            # Создаём только отсутствующие FK
+            for fk_name, fk_sql in unique_fks.items():
+                if fk_name not in existing_fk_names:
+                    await session.execute(fk_sql)

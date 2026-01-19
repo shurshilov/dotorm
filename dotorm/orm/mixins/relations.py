@@ -1,9 +1,22 @@
 """Relations ORM operations mixin."""
 
-import asyncio
 from typing import TYPE_CHECKING, Any, Literal, Self, TypeVar
 
+from ...components.filter_parser import FilterExpression
 from ...decorators import hybridmethod
+from ...access import Operation
+from ...builder.request_builder import (
+    RequestBuilderForm,
+)
+from ...fields import (
+    AttachmentMany2one,
+    AttachmentOne2many,
+    Many2many,
+    Many2one,
+    One2many,
+    One2one,
+)
+from ..utils import execute_maybe_parallel
 
 if TYPE_CHECKING:
     from ..protocol import DotModelProtocol
@@ -15,19 +28,6 @@ else:
 
 # TypeVar for generic payload - accepts any DotModel subclass
 _M = TypeVar("_M", bound="DotModel")
-
-from ...builder.request_builder import (
-    FilterExpression,
-    RequestBuilderForm,
-)
-from ...fields import (
-    AttachmentMany2one,
-    AttachmentOne2many,
-    Many2many,
-    Many2one,
-    One2many,
-    One2one,
-)
 
 
 class OrmRelationsMixin(_Base):
@@ -68,6 +68,10 @@ class OrmRelationsMixin(_Base):
         session=None,
     ) -> list[Self]:
         cls = self.__class__
+
+        # Access check + apply domain filter
+        filter = await cls._check_access(Operation.READ, filter=filter)
+
         session = cls._get_db_session(session)
 
         # Use dialect from class
@@ -327,8 +331,8 @@ class OrmRelationsMixin(_Base):
                     )
                     request_list.append(req)
 
-            # если один из запросов с ошибкой сразу прекратить выполнение и выкинуть ошибку
-            results = await asyncio.gather(*execute_list)
+            # выполняем последовательно в транзакции, параллельно вне транзакции
+            results = await execute_maybe_parallel(execute_list)
 
             # добавляем атрибуты к исходному объекту,
             # получая удобное обращение через дот-нотацию
@@ -503,10 +507,7 @@ class OrmRelationsMixin(_Base):
                             )
                         )
 
-            # 1 conn
-            results = tuple()
-            for request in request_list:
-                res = await asyncio.gather(request)
-                results += tuple(res)
+            # выполняем последовательно
+            results = await execute_maybe_parallel(request_list)
 
         return record_raw
