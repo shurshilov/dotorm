@@ -3,7 +3,7 @@
 import datetime
 from decimal import Decimal as PythonDecimal
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Type
+from typing import TYPE_CHECKING, Any, Callable, Type, Literal
 
 if TYPE_CHECKING:
     from .model import DotModel
@@ -11,6 +11,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dotorm")
 from .exceptions import OrmConfigurationFieldException
+
+# Допустимые значения для ondelete (общие для PostgreSQL и MySQL InnoDB)
+# SET DEFAULT не поддерживается MySQL InnoDB, поэтому исключён
+OnDeleteAction = Literal["restrict", "no action", "cascade", "set null"]
+VALID_ONDELETE_ACTIONS = ("restrict", "no action", "cascade", "set null")
 
 
 class Field[FieldType]:
@@ -30,6 +35,11 @@ class Field[FieldType]:
         description - Field description
         default - Default value
         options - List options for selection field
+        ondelete - Foreign key ON DELETE action:
+                   "restrict" - prevent deletion if referenced
+                   "no action" - same as restrict (deferred in PostgreSQL)
+                   "cascade" - delete child rows
+                   "set null" - set foreign key to NULL
 
         relation - Is this a relation field?
         relation_table - Related model class
@@ -60,11 +70,8 @@ class Field[FieldType]:
     string: str = ""
     options: list[str] | None = None
     compute: Callable | None = None
-    # compute_deps: Set[str]
-    # is_computed: bool = False
     relation: bool = False
     relation_table_field: str | None = None
-    # наверное перенести в класс relation
     _relation_table: "DotModel | None" = None
 
     def __init__(self, **kwargs: Any) -> None:
@@ -80,22 +87,32 @@ class Field[FieldType]:
             else:
                 self.null = True
 
-        # self.compute_deps: Set[str] = kwargs.pop("compute_deps", set())
         self.indexable = kwargs.pop("indexable", self.indexable)
         self.store = kwargs.pop("store", self.store)
-        self.ondelete = (
-            "set null" if kwargs.pop("null", self.null) else "restrict"
-        )
+
+        # ondelete - явное указание действия при удалении родительской записи
+        # Если не указано явно, определяется автоматически на основе null
+        explicit_ondelete = kwargs.pop("ondelete", None)
+        if explicit_ondelete is not None:
+            # Валидация допустимых значений
+            if explicit_ondelete.lower() not in VALID_ONDELETE_ACTIONS:
+                raise OrmConfigurationFieldException(
+                    f"Invalid ondelete value: '{explicit_ondelete}'. "
+                    f"Must be one of: {', '.join(VALID_ONDELETE_ACTIONS)}"
+                )
+            self.ondelete = explicit_ondelete.lower()
+        else:
+            # Автоматическое определение на основе null
+            # null=True → set null (безопасно удаляет связь)
+            # null=False → restrict (защищает от удаления)
+            is_nullable = kwargs.get("null", self.null)
+            self.ondelete = "set null" if is_nullable else "restrict"
 
         for name, value in kwargs.items():
             setattr(self, name, value)
         self.validation()
 
     # обман тайп чекера.
-    # TODO: В идеале, сделать так чтобы тип поля менялся если это инстанс или если это класс.
-    # 1. Возможно это необходимо сделать в классе скорей всего модели
-    # 2. Или перейти на pep-0593 (Integer = Annotated[int, Integer(primary_key=True)])
-    # но тогда в классе не будет типа Field и мы получим такую же ситуаци но в классе
     def __new__(cls, *args: Any, **kwargs: Any) -> FieldType:
         return super().__new__(cls)
 
@@ -144,7 +161,6 @@ class Field[FieldType]:
 
         if self.unique:
             if self.index:
-                # self.index = False
                 raise OrmConfigurationFieldException(
                     f"{self.__class__.__name__} can't be both index=True and unique=True. Index will be ignored."
                 )

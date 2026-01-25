@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-from ...fields import Field, Many2many, Many2one, One2many
+from ...fields import AttachmentMany2one, Field, Many2many, Many2one, One2many
 from ...decorators import hybridmethod
 from ..utils import execute_maybe_parallel
 
@@ -138,7 +138,7 @@ class OrmMany2manyMixin(_Base):
         for index, result in enumerate(results):
             req = request_list[index]
 
-            if isinstance(req.field, Many2one):
+            if isinstance(req.field, (Many2one, AttachmentMany2one)):
                 for rec in records:
                     rec_field_raw = getattr(rec, req.field_name)
                     for res_model in result:

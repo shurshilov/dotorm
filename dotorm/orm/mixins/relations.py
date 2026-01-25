@@ -395,7 +395,7 @@ class OrmRelationsMixin(_Base):
                         # Оборачиваем dict в объект модели
                         attachment_payload = field.relation_table(**field_obj)
                         attachment_id = await field.relation_table.create(
-                            attachment_payload, session
+                            payload=attachment_payload
                         )
                         setattr(payload, name, attachment_id)
 

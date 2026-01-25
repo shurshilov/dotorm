@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from ..protocol import BuilderProtocol
 
 from ..request_builder import RequestBuilder
-from ...fields import Field, Many2many, Many2one, One2many
+from ...fields import AttachmentMany2one, Field, Many2many, Many2one, One2many
 
 
 class RelationsMixin:
@@ -71,14 +71,19 @@ class RelationsMixin:
                     field=field,
                 )
 
-            elif isinstance(field, Many2one):
+            elif isinstance(field, (Many2one, AttachmentMany2one)):
                 ids_m2o: list[int] = [
-                    getattr(record, name) for record in records
+                    getattr(record, name)
+                    for record in records
+                    if getattr(record, name) is not None  # Фильтруем None
                 ]
                 # оставляем только уникальные ид, так как в m2o несколько записей
                 # могут ссылаться на одну сущность
                 ids_m2o = list(set(ids_m2o))
 
+                # Если нет ни одного ID — пропускаем
+                if not ids_m2o:
+                    continue
                 stmt, val = field.relation_table._builder.build_search(
                     fields=fields,
                     filter=[("id", "in", ids_m2o)],

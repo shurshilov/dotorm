@@ -51,6 +51,8 @@ class RequestBuilder:
         Many2many: "prepare_list_ids",
         One2many: "prepare_list_ids",
         Many2one: "prepare_list_ids",
+        AttachmentMany2one: "prepare_list_ids",
+        AttachmentOne2many: "prepare_list_ids",
     }
 
     @property

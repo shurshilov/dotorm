@@ -21,8 +21,9 @@ def dotorm_to_pydantic_nested_one(cls):
     Прерывается на первом уровне вложенности"""
     fields_store = []
     fields_relation = []
-    # fields = []
-    for field_name, field in cls.__dict__.items():
+
+    # Используем get_all_fields() чтобы получить поля включая добавленные через @extend
+    for field_name, field in cls.get_all_fields().items():
         if isinstance(field, DotField):
             if not isinstance(field, (Many2many, One2many)):
                 fields_store.append(field_name)
@@ -30,7 +31,12 @@ def dotorm_to_pydantic_nested_one(cls):
             else:
                 # если это поле множественной связи m2m или o2m
                 # то это поле будет содержать просто список своих полей
-                allowed_fields = list(field.relation_table.get_fields())
+                allowed_fields = list(field.relation_table.get_all_fields())
+                # TODO: по идее должно быть так
+                # relation_table = field.relation_table
+                # if callable(relation_table):
+                #     relation_table = relation_table()
+                # allowed_fields = list(relation_table.get_all_fields())
                 params = {field_name: (list[Literal[*allowed_fields]], ...)}
                 SchemaGetFieldRelationInput = create_model(
                     "SchemaGetFieldRelationInput",
@@ -45,22 +51,6 @@ def dotorm_to_pydantic_nested_one(cls):
     )
 
 
-# from pydantic import BaseModel, create_model
-# from typing import Any, Dict, Type
-
-
-# def create_pydantic_model_from_class(cls: Type) -> Type[BaseModel]:
-#     annotations: dict[str, TypeAlias] = getattr(cls, '__annotations__', {})
-#     fields: dict[str, tuple] = {}
-
-#     for field_name, field_type in annotations.items():
-#         # default = getattr(cls, field_name, ...)
-#         # fields[field_name] = (field_type, default)
-#         fields[field_name] = (field_type, None)
-
-#     model = create_model(cls.__name__ + 'Schema', **fields)
-#     return model
-
 from typing import (
     Annotated,
     get_type_hints,
@@ -70,18 +60,6 @@ from typing import (
     get_origin,
 )
 from pydantic import BaseModel, Field, create_model
-
-
-# def parse_string_union_type(text: str):
-#     """
-#     Парсит строку вида 'Uom | None' или 'Role | None | Other'
-#     Возвращает (is_union: bool, list of parts)
-#     """
-#     if "|" not in text:
-#         return False, [text.strip()]
-
-#     parts = [p.strip() for p in text.split("|")]
-#     return True, parts
 
 
 def replace_custom_types(py_type, class_map: dict[str, Type[BaseModel]]):
@@ -94,19 +72,6 @@ def replace_custom_types(py_type, class_map: dict[str, Type[BaseModel]]):
     """
     # --- строковый тип ---
     if isinstance(py_type, str):
-
-        # # 1) проверяем на union-строку
-        # is_union, parts = parse_string_union_type(py_type)
-
-        # if is_union:
-        #     converted = []
-        #     for part in parts:
-        #         if part == "None":
-        #             converted.append(type(None))
-        #         else:
-        #             converted.append(ForwardRef(f"Schema{part}"))
-        #     return Union[tuple(converted)]
-
         # 2) обычная строка: "Uom"
         return ForwardRef(f"Schema{py_type}")
 
@@ -164,38 +129,6 @@ def convert_field_type(
     return final_type
 
 
-# def convert_field_type(
-#     py_type, field_value, class_map: dict[str, Type[BaseModel]]
-# ):
-#     """
-#     Оборачиваем тип в Annotated, если поле кастомное.
-
-#     - Сохраняет None для одиночных моделей (Role | None)
-#     - Сохраняет поведение для списков (list[Rule])
-#     - Минимальные изменения
-#     """
-#     final_type = replace_custom_types(py_type, class_map)
-
-#     if field_value is not None:
-#         # Определяем origin, чтобы проверить, что это не список
-#         origin = get_origin(final_type)
-
-#         # Если это одиночная модель (не список) и поле допускает None — добавляем Optional
-#         if (
-#             origin not in (list, List)
-#             and get_origin(py_type) is UnionType
-#             and type(None) in get_args(py_type)
-#         ):
-#             # role_id: Role | None
-#             # return Annotated[final_type | None, field_value.__class__]
-#             return Optional[Annotated[final_type, field_value.__class__]]
-
-#         # Иначе обычное поведение (списки и одиночные обязательные поля)
-#         return Annotated[final_type, field_value.__class__]
-
-#     return final_type
-
-
 def generate_pydantic_models(
     classes: list[type], prefix="Schema"
 ) -> dict[str, type[BaseModel]]:
@@ -216,11 +149,35 @@ def generate_pydantic_models(
     # Теперь наполняем поля
     for cls in classes:
         cls_name = cls.__name__
-        annotations = getattr(cls, "__annotations__", {})
+
+        # Используем get_all_fields() для получения всех полей включая @extend
+        all_fields = cls.get_all_fields()
+
+        # Собираем аннотации из всех классов в MRO + добавленные через @extend
+        annotations = {}
+        for klass in reversed(cls.__mro__):
+            if klass is object:
+                continue
+            annotations.update(getattr(klass, "__annotations__", {}))
+
+        # Добавляем аннотации для полей из @extend которые могут не иметь __annotations__
+        for field_name, field_obj in all_fields.items():
+            if field_name not in annotations:
+                # Получаем тип из Field объекта
+                if hasattr(field_obj, "python_type"):
+                    annotations[field_name] = field_obj.python_type
+                else:
+                    # Fallback - используем Any
+                    annotations[field_name] = Any
+
         model_fields = {}
 
         for name, py_type in annotations.items():
-            field_value = getattr(cls, name, None)
+            # Проверяем что это реально поле модели
+            if name not in all_fields:
+                continue
+
+            field_value = all_fields.get(name)
 
             # Разрешаем ForwardRef или вложенные типы
             final_type = convert_field_type(py_type, field_value, known_models)
@@ -249,8 +206,6 @@ def generate_pydantic_models(
                     default = required
 
                 model_fields[name] = (final_type, default)
-            else:
-                raise ValueError("Found not DotField object")
 
         # Обновляем модель
         model_name = f"{prefix}{cls_name}"
@@ -261,15 +216,11 @@ def generate_pydantic_models(
             __config__=ConfigDict(protected_namespaces=(), frozen=False),
         )
 
-        # known_models[cls_name].model_fields.update(model_fields)
-        # known_models[cls_name].model_rebuild(force=True)
-
     # Обновляем forward refs
     _types_namespace = {
         f"Schema{name}": model for name, model in known_models.items()
     }
     for model in known_models.values():
         model.model_rebuild(force=True, _types_namespace=_types_namespace)
-    # model.update_forward_refs(**known_models)
 
     return known_models

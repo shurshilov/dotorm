@@ -294,9 +294,17 @@ class DotModel(
 
     @classmethod
     def get_fields(cls) -> dict[str, Field]:
+        """Возвращает все поля модели, включая унаследованные из миксинов.
+
+        Это алиас для get_all_fields() для обратной совместимости.
+        """
+        return cls.get_all_fields()
+
+    @classmethod
+    def get_own_fields(cls) -> dict[str, Field]:
         """Возвращает только собственные поля класса (без унаследованных).
 
-        Для получения всех полей включая унаследованные используйте get_all_fields().
+        Для получения всех полей включая унаследованные используйте get_fields().
         """
         return {
             attr_name: attr
@@ -402,7 +410,8 @@ class DotModel(
         return [
             name
             for name, field in cls.get_fields().items()
-            if field.store and not isinstance(field, Many2one)
+            if field.store
+            and not isinstance(field, (Many2one, AttachmentMany2one))
         ]
 
     @classmethod
@@ -664,14 +673,8 @@ class DotModel(
                         for rec in field
                     ]
                 elif mode == JsonMode.NESTED_LIST:
-                    # Вложенная сериализация из FORM: field это dict с data
-                    fields_json[field_name] = [
-                        {
-                            "id": rec.id,
-                            "name": rec.name or str(rec.id),
-                        }
-                        for rec in field["data"]
-                    ]
+                    # Вложенная сериализация оставляем как есть
+                    fields_json[field_name] = field
                 elif mode == JsonMode.FORM:
                     # При FORM (get) field это dict с data/fields/total
                     fields_json[field_name] = {

@@ -34,10 +34,25 @@ SQLOperator = Literal[
 
 FilterTriplet = tuple[str, SQLOperator, Any]
 
+# Рекурсивный тип для фильтров
+# FilterExpression - список элементов, где каждый элемент это:
+#   - FilterTriplet: ("field", "=", value) - условие
+#   - tuple[Literal["not"], FilterExpression]: ("not", [...]) - отрицание
+#   - Literal["and", "or"]: логический оператор между условиями
+#   - FilterExpression: [...] - вложенная группа (рекурсия)
+#
+# Примеры:
+#   [("a", "=", 1), ("b", "=", 2)]  # a=1 AND b=2
+#   [("a", "=", 1), "or", ("b", "=", 2)]  # a=1 OR b=2
+#   [("a", "=", 1), [("b", "=", 2), "or", ("c", "=", 3)]]  # a=1 AND (b=2 OR c=3)
+#   [("not", [("a", "=", 1)])]  # NOT (a=1)
 FilterExpression = list[
-    FilterTriplet
-    | tuple[Literal["not"], "FilterExpression"]
-    | list[Union["FilterExpression", Literal["and", "or"]]],
+    Union[
+        FilterTriplet,
+        tuple[Literal["not"], "FilterExpression"],
+        Literal["and", "or"],
+        "FilterExpression",
+    ]
 ]
 
 
@@ -125,6 +140,12 @@ class FilterParser:
                         raise ValueError(
                             f"Operator '{op}' cannot be used with None"
                         )
+                # != с значением должен включать NULL строки
+                # В SQL: NULL != 1 возвращает NULL (не TRUE)
+                # Поэтому добавляем OR IS NULL
+                if op == "!=":
+                    clause = f"({field} IS NULL OR {field} != %s)"
+                    return clause, (value,)
                 clause = f"{field} {op} %s"
                 return clause, (value,)
 
