@@ -143,9 +143,9 @@ class FilterParser:
                 # != с значением должен включать NULL строки
                 # В SQL: NULL != 1 возвращает NULL (не TRUE)
                 # Поэтому добавляем OR IS NULL
-                if op == "!=":
-                    clause = f"({field} IS NULL OR {field} != %s)"
-                    return clause, (value,)
+                # if op == "!=":
+                #     clause = f"({field} IS NULL OR {field} != %s)"
+                #     return clause, (value,)
                 clause = f"{field} {op} %s"
                 return clause, (value,)
 

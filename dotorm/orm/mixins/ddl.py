@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-from ...fields import AttachmentMany2one, Field, Many2many, Many2one
+from ...fields import PolymorphicMany2one, Field, Many2many, Many2one
 
 
 class DDLMixin(_Base):
@@ -131,7 +131,7 @@ class DDLMixin(_Base):
         for field_name, field in cls.get_fields().items():
             if isinstance(field, Field):
                 if (field.store and not field.relation) or isinstance(
-                    field, (Many2one, AttachmentMany2one)
+                    field, (Many2one, PolymorphicMany2one)
                 ):
                     # Создаём строку с определением поля и добавляем её в список custom_fields.
                     field_declaration = [f'"{field_name}" {field.sql_type}']

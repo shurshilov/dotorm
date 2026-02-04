@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from ..protocol import BuilderProtocol
 
 from ..request_builder import RequestBuilder
-from ...fields import AttachmentMany2one, Field, Many2many, Many2one, One2many
+from ...fields import PolymorphicMany2one, Field, Many2many, Many2one, One2many
 
 
 class RelationsMixin:
@@ -18,6 +18,7 @@ class RelationsMixin:
         self: "BuilderProtocol",
         fields_relation: list[tuple[str, Field]],
         records: list | None = None,
+        fields_nested: dict[str, list[str]] | None = None,
     ) -> list[RequestBuilder]:
         """
         Build optimized queries for loading relations.
@@ -33,12 +34,16 @@ class RelationsMixin:
             return request_list
 
         for name, field in fields_relation:
+            # TODO: взможно ошибка от дублирвоания полей
             # Default fields for relations
-            fields = ["id"]
-            if field.relation_table and field.relation_table.get_fields().get(
-                "name"
-            ):
-                fields.append("name")
+            # добавить вложенные поля от пользователя
+            fields = []
+            if fields_nested:
+                custom_fields = fields_nested.get(name)
+                if custom_fields:
+                    fields += custom_fields
+            if field.relation_table:
+                fields = field.relation_table.get_store_fields()
 
             req: RequestBuilder | None = None
 
@@ -71,7 +76,7 @@ class RelationsMixin:
                     field=field,
                 )
 
-            elif isinstance(field, (Many2one, AttachmentMany2one)):
+            elif isinstance(field, (Many2one, PolymorphicMany2one)):
                 ids_m2o: list[int] = [
                     getattr(record, name)
                     for record in records

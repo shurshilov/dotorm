@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "dotorm"
-version = "2.0.9"
+version = "2.0.10"
 description = "Async Python ORM for PostgreSQL, MySQL and ClickHouse with dot-notation access"
 readme = "README.md"
 license = {text = "MIT"}

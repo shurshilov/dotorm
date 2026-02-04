@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Self, TypeVar
 
+from ...fields import Field
+
 from ...access import Operation
 from ...components.dialect import POSTGRES
 from ...model import JsonMode
@@ -58,36 +60,94 @@ class OrmPrimaryMixin(_Base):
 
     async def update(
         self,
-        payload: "_M | None" = None,
-        fields=None,
+        payload: "_M",
+        fields: list[str] | None = None,
         session=None,
     ):
+        """
+        Обновить запись.
+
+        Автоматически обрабатывает и store поля (SQL UPDATE),
+        и relation поля (O2M/M2M: created/deleted/selected/unselected,
+        attachments: PolymorphicMany2one).
+
+        После обновления БД store-поля из payload синхронизируются в self.
+
+        Args:
+            payload: Данные для обновления (экземпляр модели).
+            fields: Список полей для обновления.
+                    Если None — обновляются все заданные поля из payload.
+            session: DB сессия
+
+        Example:
+            # Store поля
+            await record.update(User(name="New", email="new@test.com"))
+
+            # Store + relations
+            await record.update(User(name="New", role_ids={"selected": [1, 2]}))
+
+            # Конкретные поля
+            await record.update(payload, fields=["name", "email"])
+        """
         await self._check_access(Operation.UPDATE, record_ids=[self.id])
 
         session = self._get_db_session(session)
-        if payload is None:
-            payload = self
+
+        # Автоопределение полей если не указаны
+        if fields is None:
+            fields = [
+                name
+                for name, field_class in payload.get_fields().items()
+                if not isinstance(getattr(payload, name), Field)
+                and name != "id"
+            ]
+
         if not fields:
-            fields = []
+            return
 
-        if fields:
-            payload_dict = payload.json(
-                include=set(fields),
-                exclude_none=True,
-                only_store=True,
-                mode=JsonMode.UPDATE,
-            )
-        else:
-            payload_dict = payload.json(
-                exclude=payload.get_none_update_fields_set(),
-                exclude_none=True,
-                exclude_unset=True,
-                only_store=True,
-                mode=JsonMode.UPDATE,
-            )
+        await self._update_relations(payload, fields, session)
 
-        stmt, values = self._builder.build_update(payload_dict, self.id)
-        return await session.execute(stmt, values)
+        # Синхронизировать self с payload после успешного обновления
+        if payload is not self:
+            self._sync_after_update(payload, fields)
+
+    def _sync_after_update(self, payload: "_M", fields: list[str]):
+        """
+        Синхронизировать self с payload после успешного update.
+
+        Копируем только store-поля (скаляры, M2O FK) из payload в self.
+        Relation-поля (O2M, M2M) не синхронизируются — в payload они
+        в формате команд {created/deleted/selected/unselected},
+        а на self — список объектов. Если нужны актуальные relations
+        после update — следует перечитать запись из БД.
+
+        Аналогично другим ORM:
+        - SQLAlchemy: expire + lazy reload при обращении (доп. SELECT)
+        - Django: self уже мутирован до save(), M2M — отдельные операции
+        - Tortoise: self уже мутирован до save(), M2M — отдельные операции
+        """
+        store_fields = set(self.get_store_fields())
+        for name in fields:
+            if name in store_fields:
+                setattr(self, name, getattr(payload, name))
+
+    async def _update_store(
+        self,
+        payload: "_M",
+        fields: list[str],
+        session,
+    ):
+        """Прямой SQL UPDATE для store полей. Без access check и relations."""
+        payload_dict = payload.json(
+            include=set(fields),
+            exclude_unset=True,
+            exclude_none=True,
+            only_store=True,
+            mode=JsonMode.UPDATE,
+        )
+        if payload_dict:
+            stmt, values = self._builder.build_update(payload_dict, self.id)
+            return await session.execute(stmt, values)
 
     @hybridmethod
     async def update_bulk(
@@ -183,14 +243,63 @@ class OrmPrimaryMixin(_Base):
         return records
 
     @hybridmethod
-    async def get(self, id, fields: list[str] = [], session=None) -> Self:
+    async def get(
+        self,
+        id,
+        fields: list[str] = [],
+        fields_nested: dict[str, list[str]] | None = None,
+        session=None,
+    ) -> Self:
+        """
+        Получить запись по ID.
+
+        Args:
+            id: ID записи
+            fields: Список полей для загрузки (store + relation).
+            fields_nested: Словарь вложенных полей для relation.
+                Если передан — relation поля из fields загружаются:
+                    M2O  → объект модели или None
+                    O2M  → список объектов []
+                    M2M  → список объектов []
+                Если не передан — только store поля (M2O = integer FK).
+                Пример: {"user_id": ["id", "name"], "tag_ids": ["id", "name"]}
+            session: DB сессия
+
+        Returns:
+            Экземпляр модели
+
+        Raises:
+            ValueError: Если запись не найдена
+
+        Example:
+            # Только store поля
+            chat = await Chat.get(5)
+            chat.user_id  # → 42 (int)
+
+            # С relations
+            chat = await Chat.get(5,
+                fields=["id", "name", "user_id", "message_ids"],
+                fields_nested={"user_id": ["id", "name"]}
+            )
+            chat.user_id  # → User(id=42, name="John")
+        """
         cls = self.__class__
 
         await cls._check_access(Operation.READ, record_ids=[id])
 
         session = cls._get_db_session(session)
 
-        stmt, values = cls._builder.build_get(id, fields)
+        # Фильтруем fields — оставляем только store поля для SQL
+        store_fields = cls.get_store_fields()
+        fields_store = (
+            [f for f in fields if f in store_fields] if fields else []
+        )
+        if not fields_store:
+            fields_store = list(store_fields)
+        if "id" not in fields_store:
+            fields_store.append("id")
+
+        stmt, values = cls._builder.build_get(id, fields_store)
         record = await session.execute(
             stmt, values, prepare=cls.prepare_form_id
         )
@@ -198,6 +307,13 @@ class OrmPrimaryMixin(_Base):
         if not record:
             raise ValueError("Record not found")
         assert isinstance(record, cls)
+
+        # Загрузка relations если передан fields_nested
+        if fields_nested is not None and fields:
+            await cls._get_load_relations(
+                record, fields, fields_nested, session
+            )
+
         return record
 
     @hybridmethod

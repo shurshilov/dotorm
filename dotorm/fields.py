@@ -72,7 +72,7 @@ class Field[FieldType]:
     compute: Callable | None = None
     relation: bool = False
     relation_table_field: str | None = None
-    _relation_table: "DotModel | None" = None
+    _relation_table: Type["DotModel"] | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         # schema_required - переопределяет обязательность в API схеме
@@ -166,7 +166,7 @@ class Field[FieldType]:
                 )
 
     @property
-    def relation_table(self) -> "DotModel | None":
+    def relation_table(self):
         # если модель задана через лямбда функцию
         if (
             self._relation_table
@@ -435,38 +435,42 @@ class Many2one[T: "DotModel"](Field[T]):
     field_type = Type
     sql_type = "INTEGER"
     relation = True
-    relation_table: "DotModel"
+    relation_table: Type["DotModel"]
 
-    def __init__(self, relation_table: T, **kwargs: Any) -> None:
+    def __init__(
+        self, relation_table: Type["DotModel"], **kwargs: Any
+    ) -> None:
         self._relation_table = relation_table
         super().__init__(**kwargs)
 
 
-class AttachmentMany2one[T: "DotModel"](Field[T]):
+class PolymorphicMany2one[T: "DotModel"](Field[T]):
     """Many-to-one attachment field."""
 
     field_type = Type
     sql_type = "INTEGER"
     relation = True
-    relation_table: "DotModel"
+    relation_table: Type["DotModel"]
 
-    def __init__(self, relation_table: T, **kwargs: Any) -> None:
+    def __init__(
+        self, relation_table: Type["DotModel"], **kwargs: Any
+    ) -> None:
         self._relation_table = relation_table
         super().__init__(**kwargs)
 
 
-class AttachmentOne2many[T: "DotModel"](Field[list[T]]):
+class PolymorphicOne2many[T: "DotModel"](Field[list[T]]):
     """One-to-many attachment field."""
 
     field_type = list[Type]
     store = False
     relation = True
-    relation_table: "DotModel"
+    relation_table: Type["DotModel"]
     relation_table_field: str
 
     def __init__(
         self,
-        relation_table: T,
+        relation_table: Type["DotModel"],
         relation_table_field: str,
         **kwargs: Any,
     ) -> None:
@@ -549,12 +553,14 @@ class Many2many[T: "DotModel"](Field[list[T]]):
     field_type = list[Type]
     store = False
     relation = True
-    relation_table: "DotModel"
+    relation_table: Type["DotModel"]
     many2many_table: str
+    column1: str
+    column2: str
 
     def __init__(
         self,
-        relation_table: T,
+        relation_table: Type["DotModel"],
         many2many_table: str,
         column1: str,
         column2: str,
@@ -587,12 +593,12 @@ class One2many[T: "DotModel"](Field[list[T]]):
     field_type = list[Type]
     store = False
     relation = True
-    relation_table: "DotModel"
+    relation_table: Type["DotModel"]
     relation_table_field: str
 
     def __init__(
         self,
-        relation_table: T,
+        relation_table: Type["DotModel"],
         relation_table_field: str,
         **kwargs: Any,
     ) -> None:
@@ -607,11 +613,11 @@ class One2one[T: "DotModel"](Field[T]):
     field_type = Type
     store = False
     relation = True
-    relation_table: "DotModel"
+    relation_table: Type["DotModel"]
 
     def __init__(
         self,
-        relation_table: T,
+        relation_table: Type["DotModel"],
         relation_table_field: str,
         **kwargs: Any,
     ) -> None:

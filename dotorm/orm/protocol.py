@@ -95,7 +95,7 @@ class DotModelProtocol(Protocol):
     # From OrmPrimaryMixin
     async def update(
         self,
-        payload: Self | None = None,
+        payload: Self,
         fields: Any = None,
         session: Any = None,
     ) -> Any: ...
@@ -140,7 +140,32 @@ class DotModelProtocol(Protocol):
         session: Any,
         fields_relation: list[tuple[str, "Field"]],
         records: list[Any],
+        fields_nested: dict[str, list[str]] | None = None,
     ) -> None: ...
+
+    # From OrmRelationsMixin
+    @classmethod
+    async def _get_load_relations(
+        cls,
+        record: Any,
+        fields: list[str],
+        fields_nested: dict[str, list[str]],
+        session: Any,
+    ) -> None: ...
+
+    async def _update_relations(
+        self,
+        payload: Any,
+        update_fields: list[str],
+        session: Any,
+    ) -> None: ...
+
+    async def _update_store(
+        self,
+        payload: Any,
+        fields: list[str],
+        session: Any,
+    ) -> Any: ...
 
     # From DDLMixin
     @staticmethod

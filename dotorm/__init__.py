@@ -23,8 +23,8 @@ from .fields import (
     One2many,
     Many2many,
     One2one,
-    AttachmentMany2one,
-    AttachmentOne2many,
+    PolymorphicMany2one,
+    PolymorphicOne2many,
 )
 
 # Model
@@ -46,7 +46,7 @@ from .exceptions import (
     OrmUpdateEmptyParamsException,
 )
 
-__version__ = "2.0.9"
+__version__ = "2.1.0"
 
 __all__ = [
     # Fields
@@ -69,8 +69,8 @@ __all__ = [
     "One2many",
     "Many2many",
     "One2one",
-    "AttachmentMany2one",
-    "AttachmentOne2many",
+    "PolymorphicMany2one",
+    "PolymorphicOne2many",
     # Model
     "DotModel",
     "Model",

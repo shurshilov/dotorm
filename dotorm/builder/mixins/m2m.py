@@ -1,10 +1,11 @@
 """Many2many query builder."""
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Type
+
 
 if TYPE_CHECKING:
     from ..protocol import BuilderProtocol
-    from ...orm.model import DotModel
+    from ...model import DotModel
 
 
 class Many2ManyMixin:
@@ -15,7 +16,7 @@ class Many2ManyMixin:
     def build_get_many2many(
         self: "BuilderProtocol",
         id: int,
-        relation_table: "DotModel",
+        relation_table: Type["DotModel"],
         many2many_table: str,
         column1: str,
         column2: str,
@@ -58,7 +59,7 @@ class Many2ManyMixin:
     def build_get_many2many_multiple(
         self: "BuilderProtocol",
         ids: list[int],
-        relation_table: "DotModel",
+        relation_table: Type["DotModel"],
         many2many_table: str,
         column1: str,
         column2: str,

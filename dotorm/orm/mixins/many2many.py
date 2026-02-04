@@ -1,7 +1,6 @@
 """Many2many ORM operations mixin."""
 
-import asyncio
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from ..protocol import DotModelProtocol
@@ -10,7 +9,7 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-from ...fields import AttachmentMany2one, Field, Many2many, Many2one, One2many
+from ...fields import PolymorphicMany2one, Field, Many2many, Many2one, One2many
 from ...decorators import hybridmethod
 from ..utils import execute_maybe_parallel
 
@@ -112,14 +111,17 @@ class OrmMany2manyMixin(_Base):
 
     @classmethod
     async def _records_list_get_relation(
-        cls, session, fields_relation, records
+        cls,
+        session,
+        fields_relation,
+        records,
+        fields_nested: dict[str, list[str]] | None = None,
     ):
         """Load relations for a list of records (batch)."""
-        # Use dialect from class
         dialect = cls._dialect
 
         request_list = cls._builder.build_search_relation(
-            fields_relation, records
+            fields_relation, records, fields_nested
         )
         execute_list = [
             session.execute(
@@ -138,38 +140,48 @@ class OrmMany2manyMixin(_Base):
         for index, result in enumerate(results):
             req = request_list[index]
 
-            if isinstance(req.field, (Many2one, AttachmentMany2one)):
+            if isinstance(req.field, (Many2one, PolymorphicMany2one)):
+                # Сначала инициализируем все записи None
+                for rec in records:
+                    rec_field_raw = getattr(rec, req.field_name)
+                    if isinstance(rec_field_raw, Field):
+                        setattr(rec, req.field_name, None)
+                # Теперь маппим найденные результаты
                 for rec in records:
                     rec_field_raw = getattr(rec, req.field_name)
                     for res_model in result:
                         if rec_field_raw == res_model.id:
                             setattr(rec, req.field_name, res_model)
+                            break
 
             if isinstance(req.field, One2many):
+                # Сначала инициализируем все записи пустым списком
                 for rec in records:
-                    for res_model in result:
-                        res_field_id = getattr(
-                            res_model, req.field.relation_table_field
-                        )
+                    old_value = getattr(rec, req.field_name)
+                    if isinstance(old_value, Field):
+                        setattr(rec, req.field_name, [])
+                # Теперь добавляем найденные результаты
+                for res_model in result:
+                    res_field_id = getattr(
+                        res_model, req.field.relation_table_field
+                    )
+                    for rec in records:
                         if rec.id == res_field_id:
-                            old_value = getattr(rec, req.field_name)
-                            if isinstance(old_value, Field):
-                                old_value = []
-                            # иначе добавляем ид в список
-                            old_value.append(res_model)
-                            setattr(rec, req.field_name, old_value)
+                            getattr(rec, req.field_name).append(res_model)
+                            break
 
             if isinstance(req.field, Many2many):
+                # Сначала инициализируем все записи пустым списком
                 for rec in records:
-                    for res_model in result:
-                        if rec.id == res_model.m2m_id:
-                            old_value = getattr(rec, req.field_name)
-                            # если еще не задано то пустой список
-                            if isinstance(old_value, Field):
-                                old_value = []
-                            # иначе добавляем ид в список
-                            old_value.append(res_model)
-                            setattr(rec, req.field_name, old_value)
+                    old_value = getattr(rec, req.field_name)
+                    if isinstance(old_value, Field):
+                        setattr(rec, req.field_name, [])
+                # Теперь добавляем найденные результаты
                 for res_model in result:
-                    # удалить атрибут m2m_id
+                    for rec in records:
+                        if rec.id == res_model.m2m_id:
+                            getattr(rec, req.field_name).append(res_model)
+                            break
+                # Удаляем служебный атрибут m2m_id
+                for res_model in result:
                     del res_model.__dict__["m2m_id"]

@@ -1,6 +1,6 @@
 """Protocol defining what mixins expect from the base class."""
 
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, Type, runtime_checkable
 
 from ..components.filter_parser import FilterExpression
 
@@ -39,7 +39,7 @@ class BuilderProtocol(Protocol):
     def build_get_many2many_multiple(
         self: "BuilderProtocol",
         ids: list[int],
-        relation_table: "DotModel",
+        relation_table: Type["DotModel"],
         many2many_table: str,
         column1: str,
         column2: str,
@@ -50,7 +50,7 @@ class BuilderProtocol(Protocol):
     def build_get_many2many(
         self,
         id: int,
-        relation_table: "DotModel",
+        relation_table: Type["DotModel"],
         many2many_table: str,
         column1: str,
         column2: str,
