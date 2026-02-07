@@ -23,6 +23,7 @@ pytestmark = pytest.mark.integration
 # Basic CRUD Tests
 # ====================
 
+
 class TestCreate:
     """Tests for create operations."""
 
@@ -154,8 +155,7 @@ class TestUpdate:
         user_id = sample_data["users"][0]
         user = await User.get(user_id)
 
-        user.name = "John Updated"
-        await user.update()
+        await user.update(User(name="John Updated"))
 
         updated = await User.get(user_id)
         assert updated.name == "John Updated"
@@ -167,10 +167,13 @@ class TestUpdate:
         user_id = sample_data["users"][0]
         user = await User.get(user_id)
 
-        await user.update(User(
-            name="Completely New Name",
-            email="newemail@example.com",
-        ), fields=["name", "email"])
+        await user.update(
+            User(
+                name="Completely New Name",
+                email="newemail@example.com",
+            ),
+            fields=["name", "email"],
+        )
 
         updated = await User.get(user_id)
         assert updated.name == "Completely New Name"
@@ -220,7 +223,7 @@ class TestDelete:
 
         # Check deleted
         for deleted_id in ids[:3]:
-            assert await Model.get(deleted_id) is None
+            assert await Model.get_or_none(deleted_id) is None
 
         # Check remaining
         for remaining_id in ids[3:]:
@@ -230,6 +233,7 @@ class TestDelete:
 # ====================
 # Search Tests
 # ====================
+
 
 class TestSearch:
     """Tests for search operations."""
@@ -283,7 +287,9 @@ class TestSearch:
         """Test search with custom sort field."""
         from .models import User
 
-        users = await User.search(fields=["id", "name"], sort="name", order="ASC")
+        users = await User.search(
+            fields=["id", "name"], sort="name", order="ASC"
+        )
 
         # Jane comes before John alphabetically
         assert users[0].name == "Jane Smith"
@@ -370,6 +376,7 @@ class TestSearch:
 # Relation Tests
 # ====================
 
+
 class TestMany2oneRelations:
     """Tests for Many2one relations."""
 
@@ -378,10 +385,12 @@ class TestMany2oneRelations:
         from .models import Role, Model
 
         model_id = sample_data["models"][0]
-        role_id = await Role.create(Role(
-            name="new_role",
-            model_id=model_id,
-        ))
+        role_id = await Role.create(
+            Role(
+                name="new_role",
+                model_id=model_id,
+            )
+        )
 
         role = await Role.get(role_id, fields=["id", "name", "model_id"])
         assert role.model_id == model_id
@@ -399,15 +408,15 @@ class TestMany2oneRelations:
                 assert hasattr(role.model_id, "id")
                 assert hasattr(role.model_id, "name")
 
-    async def test_get_with_relations_m2o(self, sample_data):
-        """Test get_with_relations loads M2O."""
+    async def test_get_fields_nested_m2o(self, sample_data):
+        """Test get(fields_nested) loads M2O."""
         from .models import Role
 
         role_id = sample_data["roles"][0]
-        role = await Role.get_with_relations(
+        role = await Role.get(
             id=role_id,
             fields=["id", "name", "model_id"],
-            fields_info={"model_id": ["id", "name"]},
+            fields_nested={"model_id": ["id", "name"]},
         )
 
         assert role is not None
@@ -426,12 +435,14 @@ class TestOne2manyRelations:
 
         # Create AccessList records linked to Role
         for i in range(3):
-            await AccessList.create(AccessList(
-                name=f"acl_{i}",
-                role_id=role_id,
-                active=True,
-                perm_read=True,
-            ))
+            await AccessList.create(
+                AccessList(
+                    name=f"acl_{i}",
+                    role_id=role_id,
+                    active=True,
+                    perm_read=True,
+                )
+            )
 
         # Verify through search
         acls = await AccessList.search(
@@ -440,29 +451,32 @@ class TestOne2manyRelations:
         )
         assert len(acls) == 3
 
-    async def test_get_with_relations_o2m(self, sample_data):
-        """Test get_with_relations loads O2M."""
+    async def test_get_fields_nested_o2m(self, sample_data):
+        """Test get(fields_nested) loads O2M."""
         from .models import Role, AccessList
 
         role_id = sample_data["roles"][0]
 
         # Create ACL records
-        await AccessList.create(AccessList(
-            name="test_acl",
-            role_id=role_id,
-            active=True,
-            perm_read=True,
-        ))
+        await AccessList.create(
+            AccessList(
+                name="test_acl",
+                role_id=role_id,
+                active=True,
+                perm_read=True,
+            )
+        )
 
-        role = await Role.get_with_relations(
+        role = await Role.get(
             id=role_id,
             fields=["id", "name", "acl_ids"],
-            fields_info={"acl_ids": ["id", "name", "active"]},
+            fields_nested={"acl_ids": ["id", "name", "active"]},
         )
 
         assert role is not None
-        assert "data" in role.acl_ids
-        assert len(role.acl_ids["data"]) >= 1
+        # Новый API возвращает список, а не dict
+        assert isinstance(role.acl_ids, list)
+        assert len(role.acl_ids) >= 1
 
 
 class TestMany2manyRelations:
@@ -525,8 +539,8 @@ class TestMany2manyRelations:
         # Should have only 1 role left
         assert len(linked_roles) == 1
 
-    async def test_get_with_relations_m2m(self, sample_data, session):
-        """Test get_with_relations loads M2M."""
+    async def test_get_fields_nested_m2m(self, sample_data, session):
+        """Test get(fields_nested) loads M2M."""
         from .models import User, Role
 
         user_id = sample_data["users"][0]
@@ -538,20 +552,22 @@ class TestMany2manyRelations:
         await User.link_many2many(role_field, values)
 
         # Get with relations
-        user = await User.get_with_relations(
+        user = await User.get(
             id=user_id,
             fields=["id", "name", "role_ids"],
-            fields_info={"role_ids": ["id", "name"]},
+            fields_nested={"role_ids": ["id", "name"]},
         )
 
         assert user is not None
-        assert "data" in user.role_ids
-        assert len(user.role_ids["data"]) == 2
+        # Новый API возвращает список, а не dict
+        assert isinstance(user.role_ids, list)
+        assert len(user.role_ids) == 2
 
 
 # ====================
 # Field Type Tests
 # ====================
+
 
 class TestAllFieldTypes:
     """Tests for all available field types."""
@@ -671,6 +687,7 @@ class TestAllFieldTypes:
 # Constraint Tests
 # ====================
 
+
 class TestConstraints:
     """Tests for database constraints."""
 
@@ -680,17 +697,21 @@ class TestConstraints:
         from .models import UniqueModel
 
         # Create first record
-        await UniqueModel.create(UniqueModel(
-            code="UNIQUE001",
-            name="First",
-        ))
+        await UniqueModel.create(
+            UniqueModel(
+                code="UNIQUE001",
+                name="First",
+            )
+        )
 
         # Try to create duplicate
         with pytest.raises(asyncpg.exceptions.UniqueViolationError):
-            await UniqueModel.create(UniqueModel(
-                code="UNIQUE001",  # Same code
-                name="Second",
-            ))
+            await UniqueModel.create(
+                UniqueModel(
+                    code="UNIQUE001",  # Same code
+                    name="Second",
+                )
+            )
 
     async def test_required_field_constraint(self, session, clean_tables):
         """Test required (NOT NULL) constraint."""
@@ -699,15 +720,18 @@ class TestConstraints:
 
         # Try to create without required field
         with pytest.raises(asyncpg.exceptions.NotNullViolationError):
-            await RequiredFieldsModel.create(RequiredFieldsModel(
-                required_char="has value",
-                # required_int is missing
-            ))
+            await RequiredFieldsModel.create(
+                RequiredFieldsModel(
+                    required_char="has value",
+                    # required_int is missing
+                )
+            )
 
 
 # ====================
 # Transaction Tests
 # ====================
+
 
 class TestTransactions:
     """Tests for transaction handling."""
@@ -724,6 +748,7 @@ class TestTransactions:
 
         # Should be committed
         from .models import Model
+
         models = await Model.search(
             fields=["id", "name"],
             filter=[("name", "=", "transaction_test")],
@@ -755,6 +780,7 @@ class TestTransactions:
 # ====================
 # DDL Tests
 # ====================
+
 
 class TestDDL:
     """Tests for DDL (table creation) operations."""
@@ -800,6 +826,7 @@ class TestDDL:
 # Model Methods Tests
 # ====================
 
+
 class TestModelMethods:
     """Tests for model helper methods."""
 
@@ -832,7 +859,7 @@ class TestModelMethods:
         rel_fields = User.get_relation_fields()
         field_names = [name for name, _ in rel_fields]
 
-        assert "image" in field_names  # AttachmentMany2one
+        assert "image" in field_names  # PolymorphicMany2one
         assert "role_ids" in field_names  # Many2many
 
     async def test_json_serialization(self, sample_data):
@@ -878,6 +905,7 @@ class TestModelMethods:
 # Edge Cases Tests
 # ====================
 
+
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
@@ -897,7 +925,7 @@ class TestEdgeCases:
         model.id = 99999
 
         # Should not raise, just update nothing
-        await model.update()
+        await model.update(Model(name="updated"))
 
     async def test_search_with_empty_fields(self, sample_data):
         """Test search defaults to ['id'] when fields not specified."""
@@ -912,7 +940,7 @@ class TestEdgeCases:
         """Test handling special characters in strings."""
         from .models import Model
 
-        special_name = "Test's \"special\" name with <>&"
+        special_name = 'Test\'s "special" name with <>&'
         model_id = await Model.create(Model(name=special_name))
 
         created = await Model.get(model_id)

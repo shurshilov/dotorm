@@ -23,8 +23,8 @@ from dotorm import (
     One2many,
     Many2many,
     One2one,
-    AttachmentMany2one,
-    AttachmentOne2many,
+    PolymorphicMany2one,
+    PolymorphicOne2many,
 )
 from dotorm.components import POSTGRES
 
@@ -33,8 +33,10 @@ from dotorm.components import POSTGRES
 # Base configuration
 # ====================
 
+
 class BaseModel(DotModel):
     """Base model with PostgreSQL dialect."""
+
     _dialect = POSTGRES
 
 
@@ -42,8 +44,10 @@ class BaseModel(DotModel):
 # Simple model for basic field tests
 # ====================
 
+
 class Model(BaseModel):
     """Model registry - stores information about ORM models."""
+
     __table__ = "models"
 
     id: int = Integer(primary_key=True)
@@ -54,8 +58,10 @@ class Model(BaseModel):
 # Attachment model
 # ====================
 
+
 class Attachment(BaseModel):
     """File attachment model with all common fields."""
+
     __table__ = "attachments"
 
     id: int = Integer(primary_key=True)
@@ -97,8 +103,10 @@ class Attachment(BaseModel):
 # Access control models
 # ====================
 
+
 class AccessList(BaseModel):
     """Access control list - permissions for roles."""
+
     __table__ = "access_list"
 
     id: int = Integer(primary_key=True)
@@ -114,6 +122,7 @@ class AccessList(BaseModel):
 
 class Role(BaseModel):
     """User role model."""
+
     __table__ = "roles"
 
     id: int = Integer(primary_key=True)
@@ -142,8 +151,10 @@ class Role(BaseModel):
 # User model with all relation types
 # ====================
 
+
 class User(BaseModel):
     """User model with all field types."""
+
     __table__ = "users"
 
     id: int = Integer(primary_key=True)
@@ -153,11 +164,11 @@ class User(BaseModel):
     password_hash: str = Char(max_length=256)
     password_salt: str = Char(max_length=256)
 
-    # AttachmentMany2one: single attachment
-    image: Attachment | None = AttachmentMany2one(relation_table=Attachment)
+    # PolymorphicMany2one: single attachment
+    image: Attachment | None = PolymorphicMany2one(relation_table=Attachment)
 
-    # AttachmentOne2many: multiple attachments
-    image_ids: list[Attachment] = AttachmentOne2many(
+    # PolymorphicOne2many: multiple attachments
+    image_ids: list[Attachment] = PolymorphicOne2many(
         store=False,
         relation_table=Attachment,
         relation_table_field="res_id",
@@ -179,8 +190,10 @@ class User(BaseModel):
 # Model with all basic field types
 # ====================
 
+
 class AllFieldTypes(BaseModel):
     """Model demonstrating all available field types."""
+
     __table__ = "all_field_types"
 
     # Primary key
@@ -219,8 +232,10 @@ class AllFieldTypes(BaseModel):
 # Model for One2one relation test
 # ====================
 
+
 class UserProfile(BaseModel):
     """User profile - One2one relation with User."""
+
     __table__ = "user_profiles"
 
     id: int = Integer(primary_key=True)
@@ -234,8 +249,10 @@ class UserProfile(BaseModel):
 # Model with unique and indexed fields
 # ====================
 
+
 class UniqueModel(BaseModel):
     """Model with unique and indexed fields."""
+
     __table__ = "unique_models"
 
     id: int = Integer(primary_key=True)
@@ -249,8 +266,10 @@ class UniqueModel(BaseModel):
 # Model with required fields
 # ====================
 
+
 class RequiredFieldsModel(BaseModel):
     """Model with required (NOT NULL) fields."""
+
     __table__ = "required_fields"
 
     id: int = Integer(primary_key=True)
@@ -263,8 +282,10 @@ class RequiredFieldsModel(BaseModel):
 # Model with default values
 # ====================
 
+
 class DefaultValuesModel(BaseModel):
     """Model with various default values."""
+
     __table__ = "default_values"
 
     id: int = Integer(primary_key=True)
@@ -298,14 +319,14 @@ ALL_MODELS = [
 # ====================
 
 MODELS_CREATION_ORDER = [
-    Model,           # No dependencies
-    Attachment,      # No dependencies
-    Role,            # Depends on Model
-    User,            # Depends on Attachment
-    AccessList,      # Depends on Model, Role
-    AllFieldTypes,   # No dependencies
-    UserProfile,     # Depends on User
-    UniqueModel,     # No dependencies
+    Model,  # No dependencies
+    Attachment,  # No dependencies
+    Role,  # Depends on Model
+    User,  # Depends on Attachment
+    AccessList,  # Depends on Model, Role
+    AllFieldTypes,  # No dependencies
+    UserProfile,  # Depends on User
+    UniqueModel,  # No dependencies
     RequiredFieldsModel,  # No dependencies
-    DefaultValuesModel,   # No dependencies
+    DefaultValuesModel,  # No dependencies
 ]

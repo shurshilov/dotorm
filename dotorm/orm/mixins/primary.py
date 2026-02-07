@@ -2,6 +2,8 @@
 
 from typing import TYPE_CHECKING, Self, TypeVar
 
+from ...exceptions import RecordNotFound
+
 from ...fields import Field
 
 from ...access import Operation
@@ -45,7 +47,7 @@ class OrmPrimaryMixin(_Base):
 
         session = self._get_db_session(session)
         stmt = self._builder.build_delete()
-        return await session.execute(stmt, [self.id])
+        return await session.execute(stmt, [self.id], cursor="void")
 
     @hybridmethod
     async def delete_bulk(self, ids: list[int], session=None):
@@ -56,7 +58,13 @@ class OrmPrimaryMixin(_Base):
 
         session = cls._get_db_session(session)
         stmt = cls._builder.build_delete_bulk(len(ids))
-        return await session.execute(stmt, ids)
+
+        if cls._dialect.name == "postgres":
+            # ANY($1::int[]) — ids as single array param
+            return await session.execute(stmt, [ids], cursor="void")
+        else:
+            # IN (%s, %s, ...) — ids as individual params
+            return await session.execute(stmt, ids, cursor="void")
 
     async def update(
         self,
@@ -94,7 +102,7 @@ class OrmPrimaryMixin(_Base):
         session = self._get_db_session(session)
 
         # Автоопределение полей если не указаны
-        if fields is None:
+        if not fields:
             fields = [
                 name
                 for name, field_class in payload.get_fields().items()
@@ -147,7 +155,7 @@ class OrmPrimaryMixin(_Base):
         )
         if payload_dict:
             stmt, values = self._builder.build_update(payload_dict, self.id)
-            return await session.execute(stmt, values)
+            return await session.execute(stmt, values, cursor="void")
 
     @hybridmethod
     async def update_bulk(
@@ -171,7 +179,7 @@ class OrmPrimaryMixin(_Base):
         )
 
         stmt, values = cls._builder.build_update_bulk(payload_dict, ids)
-        return await session.execute(stmt, values)
+        return await session.execute(stmt, values, cursor="void")
 
     @hybridmethod
     async def create(self, payload: _M, session=None) -> int:
@@ -269,7 +277,7 @@ class OrmPrimaryMixin(_Base):
             Экземпляр модели
 
         Raises:
-            ValueError: Если запись не найдена
+            RecordNotFound: Если запись не найдена
 
         Example:
             # Только store поля
@@ -282,6 +290,44 @@ class OrmPrimaryMixin(_Base):
                 fields_nested={"user_id": ["id", "name"]}
             )
             chat.user_id  # → User(id=42, name="John")
+        """
+
+        cls = self.__class__
+        record = await cls.get_or_none(id, fields, fields_nested, session)
+
+        if record is None:
+            raise RecordNotFound(cls.__name__, id)
+
+        return record
+
+    @hybridmethod
+    async def get_or_none(
+        self,
+        id,
+        fields: list[str] = [],
+        fields_nested: dict[str, list[str]] | None = None,
+        session=None,
+    ) -> Self | None:
+        """
+        Получить запись по ID или None если не найдена.
+
+        Используйте когда отсутствие записи — нормальная ситуация
+        (проверка существования, опциональные связи).
+
+        Args:
+            id: ID записи
+            fields: Список полей для загрузки
+            fields_nested: Словарь вложенных полей для relation
+            session: DB сессия
+
+        Returns:
+            Экземпляр модели или None
+
+        Example:
+            # Проверка существования
+            user = await User.get_or_none(user_id)
+            if user is None:
+                return {"error": "User not found"}
         """
         cls = self.__class__
 
@@ -305,7 +351,8 @@ class OrmPrimaryMixin(_Base):
         )
 
         if not record:
-            raise ValueError("Record not found")
+            return None
+
         assert isinstance(record, cls)
 
         # Загрузка relations если передан fields_nested

@@ -44,9 +44,10 @@ from .components import (
 from .exceptions import (
     OrmConfigurationFieldException,
     OrmUpdateEmptyParamsException,
+    RecordNotFound,
 )
 
-__version__ = "2.1.0"
+__version__ = "2.1.1"
 
 __all__ = [
     # Fields
@@ -84,4 +85,5 @@ __all__ = [
     # Exceptions
     "OrmConfigurationFieldException",
     "OrmUpdateEmptyParamsException",
+    "RecordNotFound",
 ]
