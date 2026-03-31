@@ -7,10 +7,8 @@ import json
 from types import UnionType
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Awaitable,
-    Callable,
     ClassVar,
     Type,
     Union,
@@ -24,7 +22,6 @@ from .components.dialect import POSTGRES, Dialect
 
 if TYPE_CHECKING:
     from .builder.builder import Builder
-    import aiomysql
     import asyncpg
 
     # import asynch
@@ -54,6 +51,8 @@ from .fields import (
 
 
 class JsonMode(IntEnum):
+    """Modes for JSON serialization of model instances."""
+
     FORM = 1
     LIST = 2
     CREATE = 3
@@ -62,7 +61,8 @@ class JsonMode(IntEnum):
 
 
 @dataclass_transform(kw_only_default=True, field_specifiers=(Field,))
-class ModelMetaclass(ABCMeta): ...
+class ModelMetaclass(ABCMeta):
+    """Metaclass for DotModel with dataclass_transform support."""
 
 
 # Import mixins here to avoid circular imports
@@ -167,20 +167,13 @@ class DotModel(
             # установить имя роута такой же как имя модели по умолчанию
             cls.__route__ = "/" + cls.__table__
 
-        # Lazy field cache — built on first access via _ensure_field_cache()
-        cls._cache_all_fields: dict[str, Field] | None = None
-        cls._cache_store_fields: list[str] | None = None
-        cls._cache_store_fields_dict: dict[str, Field] | None = None
-        cls._cache_json_fields: list[str] | None = None
-        cls._cache_compute_fields: list[tuple[str, Field]] | None = None
-        cls._cache_has_json_fields: bool | None = None
-        cls._cache_has_compute_fields: bool | None = None
+        # Build field cache eagerly — runs once per class definition.
+        # Each subclass (Lead, Activity, etc.) sees full MRO including mixins.
+        cls._build_field_cache()
 
     @classmethod
-    def _ensure_field_cache(cls):
-        """Build field cache once (lazy). Called from __init__ and prepare_list_ids."""
-        if cls._cache_all_fields is not None:
-            return
+    def _build_field_cache(cls):
+        """Build all field caches from MRO. Called once in __init_subclass__."""
         fields = {}
         for klass in reversed(cls.__mro__):
             if klass is object:
@@ -195,25 +188,29 @@ class DotModel(
         cls._cache_store_fields_dict = {
             name: field for name, field in fields.items() if field.store
         }
-        cls._cache_json_fields = [
+        cls._cache_relation_fields = [
+            (name, field) for name, field in fields.items() if field.relation
+        ]
+        json_fields = [
             name
             for name, field in fields.items()
             if isinstance(field, JSONField)
         ]
-        cls._cache_compute_fields = [
+        compute_fields = [
             (name, field)
             for name, field in fields.items()
             if field.compute and not field.store
         ]
-        cls._cache_has_json_fields = bool(cls._cache_json_fields)
-        cls._cache_has_compute_fields = bool(cls._cache_compute_fields)
+        cls._cache_json_fields = json_fields
+        cls._cache_compute_fields = compute_fields
+        cls._cache_has_json_fields = bool(json_fields)
+        cls._cache_has_compute_fields = bool(compute_fields)
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, **kwargs: Any) -> None:
         # Fast path: bulk-assign all kwargs via __dict__
         self.__dict__.update(kwargs)
 
         cls = self.__class__
-        cls._ensure_field_cache()
 
         # Десериализация JSON полей (если пришла строка из БД)
         # asyncpg не десериализует jsonb автоматически без кодека,
@@ -307,7 +304,7 @@ class DotModel(
         if not r:
             return None
         if len(r) > 1:
-            raise Exception("More than 1 record in form")
+            raise ValueError("More than 1 record in form")
         record = cls(**r[0])
         return record
 
@@ -318,7 +315,6 @@ class DotModel(
         Fast path: bypasses __init__ when model has no JSON/compute fields.
         Uses object.__new__ + __dict__.update — same approach as SQLAlchemy.
         """
-        cls._ensure_field_cache()
         # Fast path: no JSON deserialization, no compute fields
         if (
             not cls._cache_has_json_fields
@@ -341,7 +337,7 @@ class DotModel(
         Заменяет m2m и o2m с списка Model на list[{id:Model}]
         """
         if len(r) != 1:
-            raise
+            raise ValueError(f"Expected exactly 1 record, got {len(r)}")
         record = cls(**r[0])
         return record
 
@@ -351,7 +347,6 @@ class DotModel(
 
         Использует кэш для избежания MRO traversal на каждом вызове.
         """
-        cls._ensure_field_cache()
         return cls._cache_all_fields
 
     @classmethod
@@ -385,7 +380,6 @@ class DotModel(
 
             Lead.get_all_fields()  # {'created_at': Datetime, 'name': Char, 'id': Integer}
         """
-        cls._ensure_field_cache()
         return cls._cache_all_fields
 
     @classmethod
@@ -399,12 +393,8 @@ class DotModel(
 
     @classmethod
     def get_relation_fields(cls):
-        """Только те поля, которые имеют связи. Ассоциации."""
-        return [
-            (name, field)
-            for name, field in cls.get_fields().items()
-            if field.relation
-        ]
+        """Только те поля, которые имеют связи. Ассоциации. Кешируется."""
+        return cls._cache_relation_fields
 
     @classmethod
     def get_relation_fields_m2m(cls):
@@ -441,7 +431,6 @@ class DotModel(
         Поля, у которых store = False, не хранятся в бд.
         По умолчанию все поля store = True, кроме One2many и Many2many
         """
-        cls._ensure_field_cache()
         return cls._cache_store_fields
 
     @classmethod
@@ -463,47 +452,43 @@ class DotModel(
     def get_store_fields_dict(cls) -> dict[str, Field]:
         """Возвращает только те поля, которые хранятся в БД.
         Результат в виде dict"""
-        cls._ensure_field_cache()
         return cls._cache_store_fields_dict
 
     @classmethod
     async def get_default_values(
         cls, fields_client_nested: dict[str, list[str]]
-    ) -> dict[str, Field]:
-        """
-        fields_client_nested - словарь вложенных полей для полей m2m и o2m
-
-        Возвращает поля с установленным значением по умолчанию.
-        Используется при создании записи(сущности) на фронтенде. Например
-        мы создаем пользователя поле active у которого по умолчанию True.
-        """
+    ):
         default_values = {}
-        for name, field in cls.get_fields().items():
-            # Для One2many и Many2many всегда возвращаем структуру x2m_default
-            if isinstance(field, (One2many, Many2many)):
-                fields_nested = fields_client_nested.get(name)
-                if fields_nested:
-                    fields_info = field.relation_table.get_fields_info_list(
-                        fields_nested
-                    )
-                    x2m_default = {
-                        "data": [],
-                        "fields": fields_info,
-                        "total": 0,
-                    }
-                    default_values.update({name: x2m_default})
 
-            elif field.default is not None:
-                if callable(field.default):
-                    # если корутина то сделать авейт
-                    if asyncio.iscoroutinefunction(field.default):
-                        res = await field.default()
-                        default_values.update({name: res})
-                    # иначе просто вызов
-                    else:
-                        default_values.update({name: field.default()})
-                else:
-                    default_values.update({name: field.default})
+        for name, field in cls.get_fields().items():
+            is_x2m = isinstance(field, (One2many, Many2many))
+
+            # 1. Получаем само значение (разрешаем callable и async)
+            value = field.default
+            if callable(value):
+                value = (
+                    await value()
+                    if asyncio.iscoroutinefunction(value)
+                    else value()
+                )
+
+            # 2. Обработка x2m полей (подготовка структуры)
+            if is_x2m:
+                nested_names = fields_client_nested.get(name)
+                # Если есть вложенные поля, создаем спец. структуру, иначе пропускаем
+                if nested_names:
+                    data = value or []
+                    default_values[name] = {
+                        "data": data,
+                        "fields": field.relation_table.get_fields_info_list(
+                            nested_names
+                        ),
+                        "total": len(data),
+                    }
+
+            # 3. Обработка обычных полей
+            elif value is not None:
+                default_values[name] = value
 
         return default_values
 
@@ -657,11 +642,23 @@ class DotModel(
         return fields_info
 
     def get_json(
-        self, exclude_unset=False, only_store=None, mode=JsonMode.LIST
+        self,
+        exclude_unset=False,
+        only_store=None,
+        mode=JsonMode.LIST,
+        include=None,
+        exclude=None,
     ):
         """Возвращает все поля модели.
         Для экземпляра класса. В экземпляре поля (класс Field)
-        преобразуются в реальные данные например Integer -> int"""
+        преобразуются в реальные данные например Integer -> int
+
+        Args:
+            include: если задан — обрабатывать ТОЛЬКО эти поля.
+                     Остальные пропускаются ДО вычисления дефолтов,
+                     что предотвращает побочные эффекты для несчитанных полей.
+            exclude: если задан — пропускать эти поля.
+        """
         fields_json = {}
         # fields - это поля описанные в модели (классе)
         if only_store:
@@ -670,41 +667,49 @@ class DotModel(
             fields = self.get_fields().items()
 
         for field_name, field_class in fields:
+            # Раннее отсечение: если задан include/exclude,
+            # пропускаем поле ДО любых вычислений (дефолты, рекурсия)
+            if include and field_name not in include:
+                continue
+            if exclude and field_name in exclude:
+                continue
+
             # field - это поле из экземпляра.
             # 1. оно может содержать данные, если задано.
             # 2. оно может содержать класс Field, если не задано.
             field = getattr(self, field_name)
 
             # НЕ ЗАДАНО
-            # если поле экземпляра класса, осталось классом Field
-            # это значит что оно не было считано из БД
+            # Поле осталось дескриптором Field — не было считано из БД.
+            # Сериализация не вычисляет default (это задача create).
+            # exclude_unset=True → пропускаем (как Pydantic).
+            # exclude_unset=False → ставим None чтобы ключ был в dict.
             if isinstance(field, Field):
-                # если установлен флаг исключить не заданные,
-                # то ничего не делать
                 if not exclude_unset:
-                    # иначе взять значение по умолчанию или None
-                    if field.default is not None:
-                        # если default - callable (лямбда или функция), вызываем её
-                        if callable(field.default):
-                            fields_json[field_name] = field.default()
-                        else:
-                            fields_json[field_name] = field.default
-                    else:
-                        fields_json[field_name] = None
+                    fields_json[field_name] = None
 
             # ЗАДАНО как many2one
             # если поле является моделью то это many2one
             elif isinstance(field, DotModel):
                 if mode == JsonMode.LIST:
                     # обрубаем, исключаем все релейшен поля
-                    fields_json[field_name] = {
-                        "id": field.id,
-                        "name": getattr(field, "name", str(field.id)),
-                    }
+                    fields_json[field_name] = field.json_list()
                 elif mode == JsonMode.FORM:
-                    fields_json[field_name] = field.json()
-                elif mode == JsonMode.CREATE or mode == JsonMode.UPDATE:
+                    fields_json[field_name] = field.json(exclude_unset=True)
+                elif mode in (JsonMode.CREATE, JsonMode.UPDATE):
                     fields_json[field_name] = field.id
+
+            # ЗАДАНО как int/id для Many2one (FK не развёрнут в объект)
+            elif isinstance(field, (int,)) and isinstance(
+                field_class, (Many2one, PolymorphicMany2one)
+            ):
+                if mode in (JsonMode.CREATE, JsonMode.UPDATE):
+                    fields_json[field_name] = field
+                else:
+                    fields_json[field_name] = {
+                        "id": field,
+                        "name": str(field),
+                    }
 
             # ЗАДАНО как many2many или one2many
             elif isinstance(
@@ -729,7 +734,10 @@ class DotModel(
                     if isinstance(field, dict):
                         fields_json[field_name] = {
                             "data": [
-                                rec.json(mode=JsonMode.NESTED_LIST)
+                                rec.json(
+                                    mode=JsonMode.NESTED_LIST,
+                                    exclude_unset=True,
+                                )
                                 for rec in field["data"]
                             ],
                             "fields": field["fields"],
@@ -737,7 +745,10 @@ class DotModel(
                         }
                     elif isinstance(field, list):
                         fields_json[field_name] = [
-                            rec.json(mode=JsonMode.NESTED_LIST)
+                            rec.json(
+                                mode=JsonMode.NESTED_LIST,
+                                exclude_unset=True,
+                            )
                             for rec in field
                         ]
                     else:
@@ -756,10 +767,21 @@ class DotModel(
                 fields_json[field_name] = field
         return fields_json
 
+    def json_list(self):
+        """Сериализация для LIST mode (вложенный M2O).
+
+        По умолчанию возвращает {id, name}.
+        Модели могут переопределить для добавления полей.
+        """
+        return {
+            "id": self.id,
+            "name": getattr(self, "name", str(self.id)),
+        }
+
     def json(
         self,
-        include={},
-        exclude={},
+        include=None,
+        exclude=None,
         exclude_none=False,
         exclude_unset=False,
         only_store=None,
@@ -776,11 +798,9 @@ class DotModel(
         Returns:
             python dict
         """
-        record = self.get_json(exclude_unset, only_store, mode)
-        if include:
-            record = {k: v for k, v in record.items() if k in include}
-        if exclude:
-            record = {k: v for k, v in record.items() if k not in exclude}
+        record = self.get_json(
+            exclude_unset, only_store, mode, include=include, exclude=exclude
+        )
         if exclude_none:
             record = {k: v for k, v in record.items() if v is not None}
         return record

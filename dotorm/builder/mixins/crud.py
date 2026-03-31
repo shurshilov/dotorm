@@ -12,7 +12,6 @@ from ..helpers import (
     build_sql_update_from_schema,
 )
 
-
 # Allowed order values (uppercase for comparison)
 _ALLOWED_ORDER = frozenset({"ASC", "DESC"})
 
@@ -244,7 +243,7 @@ class CRUDMixin:
         fields: list[str] | None = None,
         start: int | None = None,
         end: int | None = None,
-        limit: int = 80,
+        limit: int | None = None,
         order: Literal["DESC", "ASC", "desc", "asc"] | None = None,
         sort: str | None = None,
         filter: FilterExpression | None = None,
@@ -301,12 +300,21 @@ class CRUDMixin:
 
         val: tuple = ()
 
-        if end is not None and start is not None:
+        # Pagination: start/end → LIMIT (end-start) OFFSET start
+        # limit alone → LIMIT limit
+        # start alone → OFFSET start (no limit)
+        if start is not None and end is not None:
             stmt += "LIMIT %s OFFSET %s"
             val = (end - start, start)
-        elif limit:
+        elif start is not None and limit is not None:
+            stmt += "LIMIT %s OFFSET %s"
+            val = (limit, start)
+        elif limit is not None:
             stmt += "LIMIT %s"
             val = (limit,)
+        elif start is not None:
+            stmt += "OFFSET %s"
+            val = (start,)
 
         # Prepend where values
         if where_values:
