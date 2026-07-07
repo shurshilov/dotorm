@@ -10,7 +10,13 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-from ...fields import PolymorphicMany2one, Field, Many2many, Many2one
+from ...fields import (
+    PolymorphicMany2one,
+    Field,
+    Many2many,
+    Many2one,
+    TranslatedChar,
+)
 
 
 class DDLMixin(_Base):
@@ -144,11 +150,17 @@ class DDLMixin(_Base):
                         field_declaration.append("NOT NULL")
                     if field.primary_key:
                         field_declaration.append("PRIMARY KEY")
-                    if field.default is not None:
-                        if isinstance(field.default, (bool, int, str)):
-                            field_declaration.append(
-                                f"DEFAULT {cls.format_default_value(field.default)}"
-                            )
+                    # DDL DEFAULT добавляем только если default_db=True И значение
+                    # сериализуемо как литерал. Иначе default применяется ORM
+                    # на стороне Python при INSERT (поведение по умолчанию).
+                    if (
+                        field.default is not None
+                        and field.default_db
+                        and field._can_apply_to_db(field.default)
+                    ):
+                        field_declaration.append(
+                            f"DEFAULT {cls.format_default_value(field.default)}"
+                        )
 
                     if isinstance(field, Many2one):
                         # FK с именованным CONSTRAINT
@@ -216,6 +228,31 @@ class DDLMixin(_Base):
                         f'CREATE INDEX IF NOT EXISTS "{m2m_index_name}" ON "{field.many2many_table}" ("{field.column1}", "{field.column2}")'
                     )
 
+        # Составные индексы из __indexes__ класса модели.
+        # Валидация делается здесь (а не при импорте), чтобы получить
+        # осмысленную ошибку с именем таблицы.
+        composite_indexes = getattr(cls, "__indexes__", None) or []
+        all_field_names = set(cls.get_fields().keys())
+        for cols in composite_indexes:
+            if not isinstance(cols, (tuple, list)) or len(cols) < 2:
+                raise ValueError(
+                    f"{cls.__name__}.__indexes__: each entry must be a tuple "
+                    f"of 2+ column names, got {cols!r}"
+                )
+            for col in cols:
+                if col not in all_field_names:
+                    raise ValueError(
+                        f"{cls.__name__}.__indexes__: unknown column "
+                        f"{col!r} (not a field of this model)"
+                    )
+            cols_joined = "_".join(cols)
+            index_name = f"idx_{cls.__table__}_{cols_joined}"
+            cols_sql = ", ".join(f'"{c}"' for c in cols)
+            index_statements.append(
+                f'CREATE INDEX IF NOT EXISTS "{index_name}" '
+                f'ON "{cls.__table__}" ({cols_sql})'
+            )
+
         # Создаём SQL-запрос для создания таблицы с определёнными полями.
         create_table_sql = f"""\
 CREATE TABLE IF NOT EXISTS "{cls.__table__}" (\
@@ -227,20 +264,38 @@ CREATE TABLE IF NOT EXISTS "{cls.__table__}" (\
 
         # ОПТИМИЗАЦИЯ: получаем все колонки таблицы ОДНИМ запросом
         existing_columns_sql = f"""
-            SELECT column_name
+            SELECT column_name, udt_name
             FROM information_schema.columns
             WHERE table_name = '{cls.__table__}'
         """
         existing_columns_result = await session.execute(existing_columns_sql)
         existing_columns = {
-            row["column_name"] for row in existing_columns_result
+            row["column_name"]: row["udt_name"]
+            for row in existing_columns_result
         }
 
-        # Добавляем только отсутствующие колонки
+        # Добавляем только отсутствующие колонки.
+        # IF NOT EXISTS — защита от гонки нескольких воркеров: Postgres
+        # перепроверяет наличие колонки под ACCESS EXCLUSIVE локом и при
+        # совпадении делает молчаливый NOTICE вместо ошибки "column already exists".
         for field_name, field_declaration in fields_created:
             if field_name not in existing_columns:
                 await session.execute(
-                    f'ALTER TABLE "{cls.__table__}" ADD COLUMN {field_declaration};'
+                    f'ALTER TABLE "{cls.__table__}" ADD COLUMN IF NOT EXISTS {field_declaration};'
+                )
+
+        # Авто-миграция Char (varchar) → TranslatedChar (jsonb) при изменении типа поля.
+        # Существующие значения оборачиваются в {"en": value}. Другие переходы типов
+        # не поддерживаются — мигрируйте вручную через SQL.
+        for field_name, field in cls._cache_store_fields_dict.items():
+            existing_udt = existing_columns.get(field_name)
+            if existing_udt == "varchar" and isinstance(field, TranslatedChar):
+                await session.execute(
+                    f'ALTER TABLE "{cls.__table__}" '
+                    f'ALTER COLUMN "{field_name}" TYPE jsonb '
+                    f"USING jsonb_build_object("
+                    f"'en', \"{field_name}\", "
+                    f"'ru', \"{field_name}\")"
                 )
 
         # создаём индексы

@@ -8,7 +8,6 @@ from ...access import Operation
 from ...fields import (
     PolymorphicMany2one,
     PolymorphicOne2many,
-    Field,
     Many2many,
     Many2one,
     One2many,
@@ -159,6 +158,11 @@ class OrmRelationsMixin(_Base):
             Number of matching records
         """
         cls = self.__class__
+
+        # Access check + apply domain filter — иначе count приходит без
+        # учёта rules и в UI пагинация показывает завышенное число
+        filter = await cls._check_access(Operation.READ, filter=filter)
+
         session = cls._get_db_session(session)
 
         stmt, values = cls._builder.build_search_count(filter)
@@ -187,6 +191,11 @@ class OrmRelationsMixin(_Base):
             True if at least one record exists
         """
         cls = self.__class__
+
+        # Access check + apply domain filter — иначе exists вернёт True
+        # для записей которые юзер не должен видеть
+        filter = await cls._check_access(Operation.READ, filter=filter)
+
         session = cls._get_db_session(session)
 
         stmt, values = cls._builder.build_exists(filter)
@@ -253,7 +262,7 @@ class OrmRelationsMixin(_Base):
                 and relation_table
             ):
                 m2o_id = getattr(record, name)
-                if m2o_id is None or isinstance(m2o_id, Field):
+                if m2o_id is None:
                     setattr(record, name, None)
                     continue
                 execute_list.append(
@@ -334,7 +343,11 @@ class OrmRelationsMixin(_Base):
                 setattr(record, name, result if result else [])
 
     async def _update_relations(
-        self, payload: _M, update_fields: list[str], session=None
+        self,
+        payload: _M,
+        update_fields: list[str],
+        session=None,
+        depends_jobs=None,
     ):
         """
         Обновить запись с поддержкой relation полей (M2M, O2M, attachments).
@@ -368,7 +381,8 @@ class OrmRelationsMixin(_Base):
                         # Оборачиваем dict в объект модели
                         attachment_payload = field.relation_table(**field_obj)
                         attachment_id = await field.relation_table.create(
-                            payload=attachment_payload
+                            payload=attachment_payload,
+                            depends_jobs=depends_jobs,
                         )
                         setattr(payload, name, attachment_id)
 
@@ -402,7 +416,11 @@ class OrmRelationsMixin(_Base):
                     }
                     record = await field.relation_table.search(**params)
                     if len(record):
-                        request_list.append(record[0].update(field_obj))
+                        request_list.append(
+                            record[0].update(
+                                field_obj, depends_jobs=depends_jobs
+                            )
+                        )
 
                 if isinstance(field, (One2many, PolymorphicOne2many)):
                     # заменить в связанных полях виртуальный ид на вновь созданный
@@ -426,14 +444,41 @@ class OrmRelationsMixin(_Base):
 
                     if field_obj.get("created", []):
                         request_list.append(
-                            field.relation_table.create_bulk(data_created)
-                        )
-                    if field_obj["deleted"]:
-                        request_list.append(
-                            field.relation_table.delete_bulk(
-                                field_obj["deleted"]
+                            field.relation_table.create_bulk(
+                                data_created, depends_jobs=depends_jobs
                             )
                         )
+                    if field_obj.get("deleted", []):
+                        request_list.append(
+                            field.relation_table.delete_bulk(
+                                field_obj["deleted"], depends_jobs=depends_jobs
+                            )
+                        )
+                    if field_obj.get("unselected", []):
+                        relation_obj = field.relation_table()
+                        setattr(relation_obj, field.relation_table_field, None)
+                        request_list.append(
+                            field.relation_table.update_bulk(
+                                field_obj["unselected"],
+                                relation_obj,
+                                depends_jobs=depends_jobs,
+                            )
+                        )
+
+                    # Inline editing: обновление существующих записей
+                    # updated = {record_id: {field: value, ...}, ...}
+                    for rec_id, changes in field_obj.get(
+                        "updated", {}
+                    ).items():
+                        rec = await field.relation_table.get(int(rec_id))
+                        if rec:
+                            request_list.append(
+                                rec.update(
+                                    field.relation_table(**changes),
+                                    list(changes.keys()),
+                                    depends_jobs=depends_jobs,
+                                )
+                            )
 
                 if isinstance(field, Many2many):
                     # Replace virtual ID
@@ -453,7 +498,7 @@ class OrmRelationsMixin(_Base):
 
                     if field_obj.get("created", []):
                         created_ids = await field.relation_table.create_bulk(
-                            data_created
+                            data_created, depends_jobs=depends_jobs
                         )
                         if "selected" not in field_obj:
                             field_obj["selected"] = []

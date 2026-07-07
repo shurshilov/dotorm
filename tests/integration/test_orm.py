@@ -8,9 +8,8 @@ DO NOT RUN AUTOMATICALLY - requires database setup.
 """
 
 import pytest
-from datetime import datetime, date, time
+from datetime import datetime, time, timezone
 from decimal import Decimal
-
 
 # ====================
 # Mark all tests as integration
@@ -120,11 +119,17 @@ class TestGet:
         assert user.name == "John Doe"
 
     async def test_get_nonexistent_returns_none(self, session, clean_tables):
-        """Test getting non-existent record returns None."""
+        """Missing record: get_or_none() returns None, get() raises."""
         from .models import User
+        from dotorm.exceptions import RecordNotFound
 
-        user = await User.get(99999)
+        # get_or_none — отсутствие записи это норма
+        user = await User.get_or_none(99999)
         assert user is None
+
+        # get — по контракту бросает RecordNotFound
+        with pytest.raises(RecordNotFound):
+            await User.get(99999)
 
     async def test_get_with_specific_fields(self, sample_data):
         """Test getting record with specific fields."""
@@ -206,7 +211,7 @@ class TestDelete:
 
         await model.delete()
 
-        deleted = await Model.get(model_id)
+        deleted = await Model.get_or_none(model_id)
         assert deleted is None
 
     async def test_delete_bulk(self, session, clean_tables):
@@ -271,7 +276,10 @@ class TestSearch:
         """Test search with ASC order."""
         from .models import User
 
-        users = await User.search(fields=["id", "name"], order="ASC")
+        # ORDER BY применяется только когда переданы И sort, И order.
+        users = await User.search(
+            fields=["id", "name"], sort="id", order="ASC"
+        )
 
         assert users[0].id < users[1].id
 
@@ -279,7 +287,10 @@ class TestSearch:
         """Test search with DESC order."""
         from .models import User
 
-        users = await User.search(fields=["id", "name"], order="DESC")
+        # ORDER BY применяется только когда переданы И sort, И order.
+        users = await User.search(
+            fields=["id", "name"], sort="id", order="DESC"
+        )
 
         assert users[0].id > users[1].id
 
@@ -382,7 +393,7 @@ class TestMany2oneRelations:
 
     async def test_create_with_m2o(self, sample_data):
         """Test creating record with M2O relation."""
-        from .models import Role, Model
+        from .models import Role
 
         model_id = sample_data["models"][0]
         role_id = await Role.create(
@@ -429,7 +440,7 @@ class TestOne2manyRelations:
 
     async def test_create_o2m_records(self, sample_data):
         """Test creating records for O2M relation."""
-        from .models import Role, AccessList
+        from .models import AccessList
 
         role_id = sample_data["roles"][0]
 
@@ -490,7 +501,7 @@ class TestMany2manyRelations:
         role_ids = sample_data["roles"]
 
         # Get user
-        user = await User.get(user_id)
+        await User.get(user_id)
 
         # Get M2M field
         role_field = User.get_fields()["role_ids"]
@@ -541,7 +552,7 @@ class TestMany2manyRelations:
 
     async def test_get_fields_nested_m2m(self, sample_data, session):
         """Test get(fields_nested) loads M2M."""
-        from .models import User, Role
+        from .models import User
 
         user_id = sample_data["users"][0]
         role_ids = sample_data["roles"]
@@ -638,8 +649,8 @@ class TestAllFieldTypes:
         """Test date/time field types."""
         from .models import AllFieldTypes
 
-        now = datetime.now()
-        today = date.today()
+        now = datetime.now(timezone.utc)
+        today = datetime.now(timezone.utc).date()
         current_time = time(12, 30, 45)
 
         record = AllFieldTypes(

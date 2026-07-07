@@ -1,9 +1,12 @@
 """ORM field definitions."""
 
 import datetime
-from decimal import Decimal as PythonDecimal
+from decimal import Decimal as PythonDecimal, InvalidOperation
+import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Type, Literal
+
+from .access import get_access_session
 
 if TYPE_CHECKING:
     from .model import DotModel
@@ -55,6 +58,12 @@ class Field[FieldType]:
     index: bool = False
     primary_key: bool = False
     null: bool = True
+    # default_orm — применять default при INSERT в Python (callable выполняется здесь).
+    # default_db — применять default как DDL DEFAULT (только литералы, опт-ин).
+    # default по умолчанию работает как раньше: ORM-применение включено,
+    # DDL-default — нет (чтобы не менять существующие миграции).
+    default_orm: bool = True
+    default_db: bool = False
     unique: bool = False
     description: str | None = None
     ondelete: str = "set null"
@@ -62,6 +71,7 @@ class Field[FieldType]:
     # ORM attributes
     required: bool | None = None
     schema_required: bool | None = None
+    private: bool = False
     sql_type: str
     indexable: bool = True
     store: bool = True
@@ -74,9 +84,25 @@ class Field[FieldType]:
     relation_table_field: str | None = None
     _relation_table: Type["DotModel"] | None = None
 
+    # Field-level access (см. required_roles). Карта операция → коды ролей,
+    # которым разрешена операция над полем. Пусто = без ограничений.
+    # Заполняется из kwargs role_read/role_create/role_update.
+    _role_acl: dict[str, list[str]] = {}
+    # Операции, к которым применим field-level доступ (= Operation.value
+    # без DELETE — удаляют запись, не поле).
+    _ROLE_OPS = ("read", "create", "update")
+
     def __init__(self, **kwargs: Any) -> None:
         # schema_required - переопределяет обязательность в API схеме
         self.schema_required = kwargs.pop("schema_required", None)
+        # private — исключает поле из Pydantic-схем (см. описание в классе)
+        self.private = kwargs.pop("private", False)
+
+        # Тонкий контроль того, где применяется default. По умолчанию
+        # default_orm=True (как раньше — ORM подставит при INSERT),
+        # default_db=False (DDL DEFAULT — осознанный опт-ин).
+        self.default_orm = kwargs.pop("default_orm", self.default_orm)
+        self.default_db = kwargs.pop("default_db", self.default_db)
 
         # добавляем поле required для удобства работы
         # которое переопределяет null
@@ -108,13 +134,111 @@ class Field[FieldType]:
             is_nullable = kwargs.get("null", self.null)
             self.ondelete = "set null" if is_nullable else "restrict"
 
+        # Field-level access: role_read / role_create / role_update — строка
+        # кодов ролей через запятую ("system_admin" или "admin,manager"),
+        # каждый атрибут бьёт строго в свою операцию. Токен SUPERUSER —
+        # «только суперпользователь». Парсим (и pop'аем) ДО общего
+        # setattr-цикла ниже, иначе осели бы мусорными атрибутами.
+        self._role_acl = self._parse_role_acl(kwargs)
+
         for name, value in kwargs.items():
             setattr(self, name, value)
         self.validation()
 
+    def _parse_role_acl(self, kwargs: dict) -> dict[str, list[str]]:
+        """role_<op> (строка кодов через запятую) → {операция: [коды]}.
+
+        Каждый атрибут идёт строго в свою операцию (read/create/update).
+        Токен SUPERUSER означает «только суперпользователь».
+        """
+        acl: dict[str, list[str]] = {}
+        for op in self._ROLE_OPS:
+            raw = kwargs.pop(f"role_{op}", None)
+            if raw:
+                acl[op] = [c.strip() for c in raw.split(",") if c.strip()]
+        return acl
+
+    def required_roles(self, operation: str) -> list[str] | None:
+        """Коды ролей, которым разрешена операция над полем, либо None.
+
+        None = поле без field-level ограничений на эту операцию.
+        Зарезервированный код SUPERUSER (см. access.SUPERUSER) трактуется
+        слоем security как «только is_admin». operation: 'read'|'create'|
+        'update' (= Operation.value).
+        """
+        return self._role_acl.get(operation)
+
     # обман тайп чекера.
     def __new__(cls, *args: Any, **kwargs: Any) -> FieldType:
         return super().__new__(cls)
+
+    # Имя поля в классе-владельце. Заполняется Python автоматически через
+    # __set_name__ при создании класса (для каждого class-attr вида Field).
+    # Используется __get__ для lookup в instance.__dict__.
+    name: str = ""
+
+    def __set_name__(self, owner, name: str) -> None:
+        self.name = name
+
+    def __get__(self, instance, owner):
+        """Non-data descriptor: значение поля или None.
+
+        Class-level access (Cls.foo) → возвращаем сам Field-инстанс
+            (используется декораторами @depends, тайп-чекерами, и сборкой
+            кэшей по cls.__dict__).
+        Instance-level access (rec.foo) → возвращаем instance.__dict__[name]
+            если ключ есть (включая случай explicit None), иначе None.
+
+        Отсутствие __set__ делает дескриптор non-data: rec.foo = x
+        записывает в instance.__dict__['foo'] обычным путём. Это и есть
+        источник правды «было ли явно назначено»: name in rec.__dict__.
+
+        Контракт для бизнес-кода:
+          rec.tax_id        → значение (int / Tax / None / ...)
+          rec.is_assigned("tax_id") → было ли явно назначено
+                                       (включая explicit None).
+        """
+        if instance is None:
+            return self
+        return instance.__dict__.get(self.name)
+
+    def to_sql_update(self, field_name: str, value: Any) -> tuple[str, Any]:
+        """Возвращает (SQL-fragment для SET-клаузы, bind-value).
+
+        По умолчанию: 'field=%s' с обычным значением как параметром.
+        Поля с особым SQL (TranslatedChar с jsonb_set, TSVector и т.п.)
+        переопределяют этот метод и возвращают свой SQL-фрагмент.
+
+        Билдер вызывает этот метод для каждого поля из payload —
+        тогда никакая логика конкретных типов полей не утекает в билдер.
+        """
+        return f"{field_name}=%s", value
+
+    @staticmethod
+    def _can_apply_to_db(default: Any) -> bool:
+        """Можно ли default сериализовать как DDL DEFAULT литерал.
+
+        Только литералы (bool/int/float/str/bytes). Callables не идут в SQL.
+        """
+        if default is None or callable(default):
+            return False
+        return isinstance(default, (bool, int, float, str, bytes))
+
+    @property
+    def has_backend_default(self) -> bool:
+        """Гарантирует ли бэк (ORM или БД) заполнение поля.
+
+        True если default задан и хотя бы один путь применения активен:
+        - default_orm=True → ORM подставит при INSERT
+        - default_db=True И литерал → БД сама подставит через DDL DEFAULT
+        """
+        if self.default is None:
+            return False
+        if self.default_orm:
+            return True
+        if self.default_db and self._can_apply_to_db(self.default):
+            return True
+        return False
 
     def validation(self):
         if not self.indexable and (self.unique or self.index):
@@ -345,7 +469,7 @@ class Boolean(Field[bool]):
     sql_type = "BOOL"
 
 
-class Decimal(Field[PythonDecimal]):
+class Decimal(Field[float]):
     """Accurate decimal field."""
 
     def __init__(
@@ -365,6 +489,23 @@ class Decimal(Field[PythonDecimal]):
     @property
     def sql_type(self) -> str:
         return f"DECIMAL({self.max_digits},{self.decimal_places})"
+
+    @staticmethod
+    def to_decimal(value: Any) -> PythonDecimal:
+        """Безопасное приведение к Decimal для арифметики.
+
+        Незаданное поле модели резолвится в дескриптор Field — это и
+        значит "значение не задано"; None / Field / bool / мусор → 0.
+        Доступно доменному коду как ``Decimal.to_decimal(x)``.
+        """
+        if value is None or isinstance(value, (Field, bool)):
+            return PythonDecimal(0)
+        if isinstance(value, PythonDecimal):
+            return value
+        try:
+            return PythonDecimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return PythonDecimal(0)
 
 
 class Datetime(Field[datetime.datetime]):
@@ -415,6 +556,122 @@ class JSONField(Field[dict | list]):
     class _db_mysql:
         sql_type = "JSON"
 
+    def deserialization(self, value):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            # Не JSON — значит это Python-input (Role(name="Admin")),
+            # возвращаем как есть.
+            return value
+        return value
+
+    def serialization(self, value):
+        return json.dumps(value, ensure_ascii=False)
+
+    def to_sql_update(self, field_name: str, value: Any) -> tuple[str, Any]:
+        """JSONField: сериализуем dict/list в JSON-строку для BIND-параметра."""
+        return f"{field_name}=%s", self.serialization(value)
+
+
+class TranslatedChar(JSONField):
+    """Переводимая строка.
+
+    В БД хранится как JSONB-словарь {"en": "...", "ru": "...", ...}.
+    При чтении значения для текущего языка пользователя.
+    При записи строки — пишется в текущий язык, остальные переводы затираются.
+    При записи dict — записывается как есть.
+
+    Язык берётся из access_session.user_id.lang_id.code, fallback "en".
+    """
+
+    # обман тайп-чекинга на самом деле это dict | list
+    # при чтении из бд, но мы всегда достаем строку
+    # при этом при записи можем использовать дикты
+    if TYPE_CHECKING:
+
+        def __new__(cls, value: str = "", **kwargs: Any) -> str: ...
+
+    else:
+
+        def __new__(cls, *args, **kwargs):
+            return super().__new__(cls)
+
+    @staticmethod
+    def _current_lang() -> str:
+        """Код языка из текущей сессии.
+
+        Контракт: session должен реализовать метод get_lang() -> str.
+        Если сессии нет (фон, post_init, cron) — возвращает 'en'.
+        """
+        session = get_access_session()
+        return session.get_lang() if session else "en"
+
+    def deserialization(self, value):
+        """JSON-строка из БД → строка для текущего языка пользователя.
+
+        Fallback: текущий язык → 'en' → первое непустое → "".
+        Если value — Python-input (Role(name="Admin")) и не JSON,
+        возвращается как есть.
+        """
+        if not value:
+            return ""
+
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                return value
+
+        if not isinstance(value, dict):
+            return ""
+
+        lang = self._current_lang()
+        return (
+            value.get(lang)
+            or value.get("en")
+            or next((v for v in value.values() if v), "")
+        )
+
+    def serialization(self, value):
+        """str/dict → JSON-строка для записи в БД.
+
+        - str: оборачиваем в {current_lang: value} — используется при
+          CREATE (запись новая, другим языкам взяться неоткуда).
+        - dict: json.dumps как есть — multi-language override.
+
+        При UPDATE со строкой serialization НЕ вызывается — там
+        to_sql_update возвращает jsonb_set(...) для atomic merge.
+        """
+        if isinstance(value, str):
+            value = {self._current_lang(): value}
+        return super().serialization(value)
+
+    def to_sql_update(self, field_name: str, value: Any) -> tuple[str, Any]:
+        """TranslatedChar: для str — atomic jsonb_set merge в текущий язык,
+        для dict — полный override через serialization (как обычный JSON).
+
+        jsonb_set(COALESCE(col, '{}'::jsonb), '{lang}', to_jsonb(%s::text)):
+        - COALESCE защищает от NULL (если колонка пустая).
+        - '{lang}' — путь: обновляем только ключ текущего языка.
+        - to_jsonb(%s::text) — оборачивает строку в jsonb-значение.
+        Другие языки в колонке НЕ затираются — истинный merge.
+        """
+        if isinstance(value, str):
+            lang = self._current_lang()
+            sql = (
+                f"{field_name} = jsonb_set("
+                f"COALESCE({field_name}, '{{}}'::jsonb), "
+                f"'{{{lang}}}', to_jsonb(%s::text))"
+            )
+            return sql, value
+        return super().to_sql_update(field_name, value)
+
+
+# class TranslatedText(TranslatedChar):
+#     """Переводимый длинный текст. Поведение идентично TranslatedChar."""
+
+#     pass
+
 
 class Binary(Field[bytes]):
     """Binary bytes field."""
@@ -429,7 +686,7 @@ class Binary(Field[bytes]):
 # ==================== RELATION FIELDS ====================
 
 
-class Many2one[T: "DotModel"](Field[T]):
+class Many2one[T: DotModel](Field[T]):
     """Many-to-one relation field."""
 
     field_type = Type
@@ -444,7 +701,7 @@ class Many2one[T: "DotModel"](Field[T]):
         super().__init__(**kwargs)
 
 
-class PolymorphicMany2one[T: "DotModel"](Field[T]):
+class PolymorphicMany2one[T: DotModel](Field[T]):
     """Many-to-one attachment field."""
 
     field_type = Type
@@ -459,7 +716,7 @@ class PolymorphicMany2one[T: "DotModel"](Field[T]):
         super().__init__(**kwargs)
 
 
-class PolymorphicOne2many[T: "DotModel"](Field[list[T]]):
+class PolymorphicOne2many[T: DotModel](Field[list[T]]):
     """One-to-many attachment field."""
 
     field_type = list[Type]
@@ -547,7 +804,7 @@ class PolymorphicOne2many[T: "DotModel"](Field[list[T]]):
 #         return self._data is not None and len(self._data) > 0
 
 
-class Many2many[T: "DotModel"](Field[list[T]]):
+class Many2many[T: DotModel](Field[list[T]]):
     """Many-to-many relation field."""
 
     field_type = list[Type]
@@ -587,7 +844,7 @@ class Many2many[T: "DotModel"](Field[list[T]]):
     #     self._field_name = name
 
 
-class One2many[T: "DotModel"](Field[list[T]]):
+class One2many[T: DotModel](Field[list[T]]):
     """One-to-many relation field."""
 
     field_type = list[Type]
@@ -607,7 +864,7 @@ class One2many[T: "DotModel"](Field[list[T]]):
         super().__init__(**kwargs)
 
 
-class One2one[T: "DotModel"](Field[T]):
+class One2one[T: DotModel](Field[T]):
     """One-to-one relation field."""
 
     field_type = Type

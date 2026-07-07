@@ -3,7 +3,6 @@
 from abc import ABCMeta
 import asyncio
 from enum import IntEnum
-import json
 from types import UnionType
 from typing import (
     TYPE_CHECKING,
@@ -17,11 +16,10 @@ from typing import (
     get_args,
 )
 
-
+from .builder.builder import Builder
 from .components.dialect import POSTGRES, Dialect
 
 if TYPE_CHECKING:
-    from .builder.builder import Builder
     import asyncpg
 
     # import asynch
@@ -47,6 +45,7 @@ from .fields import (
     One2many,
     One2one,
     PolymorphicMany2one,
+    TranslatedChar,
 )
 
 
@@ -143,6 +142,12 @@ class DotModel(
     __schema_read_search_input__: ClassVar[Type]
     __schema_update__: ClassVar[Type]
     __response_model_exclude__: ClassVar[set[str] | None] = None
+    # Составные индексы таблицы. Список кортежей имён колонок.
+    # Пример: __indexes__ = [("res_model", "res_id"), ("user_id", "chat_id", "is_active")]
+    # Одиночные индексы по-прежнему объявляются через index=True в поле.
+    # Имя индекса генерируется автоматически: idx_<table>_<col1>_<col2>_...
+    # Создаётся через CREATE INDEX IF NOT EXISTS, так что безопасно при повторном запуске.
+    __indexes__: ClassVar[list[tuple[str, ...]]] = []
     # its auto
     # __schema_output_search__: ClassVar[Type]
 
@@ -170,6 +175,18 @@ class DotModel(
         # Build field cache eagerly — runs once per class definition.
         # Each subclass (Lead, Activity, etc.) sees full MRO including mixins.
         cls._build_field_cache()
+        # @depends compute cache. Должен идти ПОСЛЕ _build_field_cache,
+        # потому что использует _cache_all_fields для определения, какие
+        # поля пишет каждый compute-метод (через field.compute=...).
+        cls._build_compute_cache()
+
+        # Default query builder — доступен сразу после определения модели, без
+        if "__table__" in cls.__dict__:
+            cls._builder = Builder(
+                table=cls.__table__,
+                fields=cls._cache_all_fields,
+                dialect=cls._dialect,
+            )
 
     @classmethod
     def _build_field_cache(cls):
@@ -194,7 +211,7 @@ class DotModel(
         json_fields = [
             name
             for name, field in fields.items()
-            if isinstance(field, JSONField)
+            if isinstance(field, (JSONField, TranslatedChar))
         ]
         compute_fields = [
             (name, field)
@@ -206,6 +223,150 @@ class DotModel(
         cls._cache_has_json_fields = bool(json_fields)
         cls._cache_has_compute_fields = bool(compute_fields)
 
+    @classmethod
+    def _build_compute_cache(cls):
+        """Собрать @depends-методы для движка _collect_depends + recompute().
+
+        Заполняет per-class:
+        - _cache_compute_method_deps: {method → tuple(deps)} —
+          вход для OrmPrimaryMixin._build_depends_tables (строит
+          _depends_local_triggers / _depends_parent_triggers).
+        - _cache_compute_writes: {method → set(written_fields)} —
+          OrmPrimaryMixin._fire_compute персистит эти поля и каскадирует.
+        - _cache_compute_by_dep: {dep_local_segment → set(methods)} —
+          вход для recompute() (in-memory путь, см. execute_onchange).
+        - _cache_compute_order: list[method_name] — порядок объявления,
+          без топосорта. Каскад через _collect_depends на written-полях
+          сам подтягивает downstream-методы — отдельная сортировка не
+          нужна.
+        - _cache_has_compute_methods: bool.
+
+        Вызывается один раз из __init_subclass__ после _build_field_cache.
+        """
+
+        # Резолвер: превращает любой допустимый формат dep в строку имени.
+        # Поддерживает:
+        #   "price_unit"            → "price_unit"
+        #   "tax_id.amount"         → "tax_id.amount"
+        #   tax_id (Field-инстанс)  → "tax_id"  (из field.name, заданного __set_name__)
+        #   (tax_id, "amount")      → "tax_id.amount"
+        # Field-инстансы в class-attr scope @depends — это сам объект
+        # (Field.__get__ возвращает self при class-level access). Их name
+        # уже проставлен Python через __set_name__ при создании класса.
+        def _resolve_dep(d) -> str | None:
+            if isinstance(d, str):
+                return d
+            if isinstance(d, Field):
+                return d.name or None
+            if isinstance(d, tuple) and len(d) == 2:
+                head, tail = d
+                head_name = head.name if isinstance(head, Field) else head
+                if isinstance(head_name, str) and isinstance(tail, str):
+                    return f"{head_name}.{tail}"
+            return None
+
+        def _resolve_list(raw) -> tuple[str, ...]:
+            return tuple(d for d in (_resolve_dep(x) for x in raw) if d)
+
+        # Два раздельных списка на метод:
+        #   triggers — поля, при изменении которых метод пересчитывается;
+        #   prefetch — relation-пути, которые догружаются перед compute.
+        method_deps: dict[str, tuple[str, ...]] = {}
+        method_prefetch: dict[str, tuple[str, ...]] = {}
+        for klass in reversed(cls.__mro__):
+            if klass is object:
+                continue
+            for attr_name, attr in klass.__dict__.items():
+                func = getattr(attr, "__func__", attr)
+                if callable(func) and getattr(func, "_is_compute", False):
+                    method_deps[attr_name] = _resolve_list(
+                        getattr(func, "_compute_deps_triggers", ())
+                    )
+                    method_prefetch[attr_name] = _resolve_list(
+                        getattr(func, "_compute_deps_prefetch", ())
+                    )
+
+        # имя_метода → множество полей, которые он пишет
+        # (определяется по объявлению compute="..." / compute=callable
+        # в самих полях; собирается из _cache_all_fields).
+        method_writes: dict[str, set[str]] = {m: set() for m in method_deps}
+        for fname, field in cls._cache_all_fields.items():
+            comp = field.compute
+            if isinstance(comp, str):
+                target = comp
+            elif callable(comp):
+                target = getattr(comp, "__name__", None)
+            else:
+                target = None
+            if target in method_writes:
+                method_writes[target].add(fname)
+
+        # dep-поле (локальный первый сегмент пути) → методы.
+        # Только из triggers (prefetch — это про загрузку, не про
+        # инвалидацию). Нужно recompute()/onchange: по триггерному полю
+        # формы выбираются методы, чьи triggers его упоминают.
+        by_dep: dict[str, set[str]] = {}
+        for m, deps in method_deps.items():
+            for d in deps:
+                local = d.split(".", 1)[0]
+                by_dep.setdefault(local, set()).add(m)
+
+        cls._cache_compute_method_deps = method_deps
+        cls._cache_compute_prefetch_deps = method_prefetch
+        cls._cache_compute_writes = method_writes
+        cls._cache_compute_by_dep = by_dep
+        cls._cache_compute_order = list(method_deps.keys())
+        cls._cache_has_compute_methods = bool(method_deps)
+
+    async def recompute(
+        self, changed: set[str] | None = None, session=None
+    ) -> set[str]:
+        """In-memory пересчёт stored computed-полей @depends на self.
+
+        Используется ИСКЛЮЧИТЕЛЬНО из execute_onchange — там нужно
+        пересчитать поля для возврата на форму, не записывая в БД.
+        В CRUD-пути работает _collect_depends (он же персистит результат
+        и поднимает родителей через _depends_parent_triggers).
+
+        Args:
+            changed: если задано — запускаются только методы, чьи
+                зависимости пересекаются с этими полями (по локальному
+                первому сегменту пути). None — все методы.
+
+        Returns:
+            Множество имён полей, перезаписанных пересчётом.
+        """
+        cls = self.__class__
+        if not cls._cache_has_compute_methods:
+            return set()
+
+        order = cls._cache_compute_order
+        if changed is None:
+            methods = list(order)
+        else:
+            triggered: set[str] = set()
+            for f in changed:
+                triggered |= cls._cache_compute_by_dep.get(f, set())
+            if not triggered:
+                return set()
+            methods = [m for m in order if m in triggered]
+
+        written: set[str] = set()
+        for mname in methods:
+            handler = getattr(self, mname, None)
+            if handler is None:
+                continue
+            # Догружаем relation-поля, объявленные в dotted @depends
+            # этого метода — тот же контракт, что в _fire_compute из
+            # CRUD-пути. Compute читает self.tax_id.amount и
+            # self.order_line_ids[i].price_subtotal без fetch'ей внутри.
+            await self._ensure_prefetch_for_method(mname, session)
+            result = handler()
+            if asyncio.iscoroutine(result):
+                await result
+            written |= cls._cache_compute_writes.get(mname, set())
+        return written
+
     def __init__(self, **kwargs: Any) -> None:
         # Fast path: bulk-assign all kwargs via __dict__
         self.__dict__.update(kwargs)
@@ -215,14 +376,23 @@ class DotModel(
         # Десериализация JSON полей (если пришла строка из БД)
         # asyncpg не десериализует jsonb автоматически без кодека,
         # поэтому нужен fallback json.loads для строковых значений.
+        # Для TranslatedChar дополнительно распаковываем dict в строку
+        # текущего языка пользователя.
         if cls._cache_has_json_fields:
+            cls_fields = cls._cache_all_fields
             for name in cls._cache_json_fields:
                 value = self.__dict__.get(name)
-                if isinstance(value, str):
-                    try:
-                        self.__dict__[name] = json.loads(value)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                if value is not None:
+                    self.__dict__[name] = cls_fields[name].deserialization(
+                        value
+                    )
+            # cls_fields = cls._cache_all_fields
+            # for name in cls._cache_json_fields:
+            #     value = self.__dict__.get(name)
+            #     if isinstance(value, str):
+            #         field_obj = cls_fields.get(name)
+            #         if field_obj:
+            #             self.__dict__[name] = field_obj.deserialization(value)
 
         # Вычисляемые поля (compute, не хранящиеся в БД)
         if cls._cache_has_compute_fields:
@@ -454,6 +624,54 @@ class DotModel(
         Результат в виде dict"""
         return cls._cache_store_fields_dict
 
+    def is_assigned(self, name: str) -> bool:
+        """True если поле было явно присвоено на этом инстансе.
+
+        Источник правды — `instance.__dict__`: Python пишет туда при
+        обычном setattr (Field — non-data descriptor, без __set__).
+
+        Случаи:
+          rec.tax_id = 5      → is_assigned("tax_id") = True
+          rec.tax_id = None   → is_assigned("tax_id") = True (явный None)
+          никогда не задавали → is_assigned("tax_id") = False
+
+        Используется в местах, где нужно отличать «явно None» от
+        «не загружено» (apply_defaults, json exclude_unset, и т.п.).
+        Когда такого различия не нужно — просто читай `rec.tax_id`,
+        он сам вернёт None при не-назначенном поле через Field.__get__.
+        """
+        return name in self.__dict__
+
+    def assigned_fields(
+        self,
+        exclude: tuple[str, ...] = ("id",),
+        exclude_none: bool = False,
+    ) -> list[str]:
+        """Список имён полей, которые явно присвоены на этом инстансе.
+
+        Используется для:
+          - автоопределения `fields=` в update без явного списка;
+          - построения списка изменённых полей для `_collect_depends`
+            в delete / delete_bulk / create / create_bulk.
+
+        Args:
+            exclude: не включать поля с этими именами (по умолчанию "id").
+            exclude_none: если True, поля со значением `None` тоже
+                пропустить. По умолчанию False: `payload.tax_id = None`
+                — это валидное явное значение «обнулить FK», и compute,
+                подписанный на tax_id, должен это увидеть.
+        """
+
+        instance_dict = self.__dict__
+        return [
+            # проходим все поля в классе
+            name
+            for name in self._cache_all_fields
+            if name not in exclude
+            and name in instance_dict
+            and not (exclude_none and instance_dict[name] is None)
+        ]
+
     @classmethod
     async def get_default_values(
         cls, fields_client_nested: dict[str, list[str]]
@@ -477,7 +695,10 @@ class DotModel(
                 nested_names = fields_client_nested.get(name)
                 # Если есть вложенные поля, создаем спец. структуру, иначе пропускаем
                 if nested_names:
-                    data = value or []
+                    if value:
+                        data = [value_item.json_list() for value_item in value]
+                    else:
+                        data = []
                     default_values[name] = {
                         "data": data,
                         "fields": field.relation_table.get_fields_info_list(
@@ -485,7 +706,8 @@ class DotModel(
                         ),
                         "total": len(data),
                     }
-
+            elif isinstance(field, Many2one) and isinstance(value, DotModel):
+                default_values[name] = value.json(mode=JsonMode.FORM)
             # 3. Обработка обычных полей
             elif value is not None:
                 default_values[name] = value
@@ -540,9 +762,10 @@ class DotModel(
         if field.required is not None:
             return field.required
 
-        # 3.5. Поле с default значением не обязательно в API —
-        #      клиент не должен передавать то, что ORM заполнит сам.
-        if field.default is not None:
+        # 3.5. Поле с гарантированным backend-default'ом не обязательно
+        #      в API — клиент не должен передавать то, что бэк подставит сам.
+        #      Учитываются default_orm и default_db (см. fields.Field).
+        if field.has_backend_default:
             return False
 
         # 4. Проверяем аннотацию типа
@@ -674,28 +897,34 @@ class DotModel(
             if exclude and field_name in exclude:
                 continue
 
-            # field - это поле из экземпляра.
-            # 1. оно может содержать данные, если задано.
-            # 2. оно может содержать класс Field, если не задано.
-            field = getattr(self, field_name)
-
             # НЕ ЗАДАНО
-            # Поле осталось дескриптором Field — не было считано из БД.
+            # Поле не присвоено на этом инстансе (отсутствует в __dict__).
             # Сериализация не вычисляет default (это задача create).
             # exclude_unset=True → пропускаем (как Pydantic).
             # exclude_unset=False → ставим None чтобы ключ был в dict.
-            if isinstance(field, Field):
+            if not self.is_assigned(field_name):
                 if not exclude_unset:
                     fields_json[field_name] = None
+                continue
+
+            # ЗАДАНО — значение либо реальное, либо явный None.
+            field = getattr(self, field_name)
 
             # ЗАДАНО как many2one
             # если поле является моделью то это many2one
-            elif isinstance(field, DotModel):
+            if isinstance(field, DotModel):
                 if mode == JsonMode.LIST:
                     # обрубаем, исключаем все релейшен поля
                     fields_json[field_name] = field.json_list()
+                elif mode == JsonMode.NESTED_LIST:
+                    # Вложенный список (напр. O2M внутри FORM) —
+                    # для Many2one также возвращаем компактное {id, name},
+                    # иначе поле теряется при сериализации.
+                    fields_json[field_name] = field.json_list()
                 elif mode == JsonMode.FORM:
-                    fields_json[field_name] = field.json(exclude_unset=True)
+                    fields_json[field_name] = field.json(
+                        exclude_unset=True, mode=JsonMode.FORM
+                    )
                 elif mode in (JsonMode.CREATE, JsonMode.UPDATE):
                     fields_json[field_name] = field.id
 
@@ -754,13 +983,19 @@ class DotModel(
                     else:
                         fields_json[field_name] = field
 
-            # Сериализуем JSONField в строку при записи в БД
-            elif (
-                only_store
-                and isinstance(field_class, JSONField)
-                and isinstance(field, (dict, list))
+            # JSONField / TranslatedChar при записи в БД.
+            # При UPDATE оставляем сырое значение — билдер через
+            # field.to_sql_update сам построит SET-клаузу:
+            # для TranslatedChar+str → jsonb_set (atomic merge в язык),
+            # для dict/list → обычный %s с json.dumps.
+            # При CREATE сериализуем сразу в JSON-строку (через %s в INSERT).
+            elif only_store and isinstance(
+                field_class, (JSONField, TranslatedChar)
             ):
-                fields_json[field_name] = json.dumps(field, ensure_ascii=False)
+                if mode == JsonMode.UPDATE:
+                    fields_json[field_name] = field
+                else:
+                    fields_json[field_name] = field_class.serialization(field)
             # ЗАДАНО как значение (число строка время...)
             # иначе поле считается прочитанным из БД и просто пробрасывается
             else:
@@ -777,6 +1012,10 @@ class DotModel(
             "id": self.id,
             "name": getattr(self, "name", str(self.id)),
         }
+        # fields = {"id": self.id}
+        # if getattr(self, "name"):
+        #     fields.update({"name": self.name})
+        # return fields
 
     def json(
         self,
@@ -810,21 +1049,29 @@ class DotModel(
         """
         Получить список полей у которых есть onchange обработчики.
 
-        Используется фронтендом для определения за какими полями следить.
+        Возвращает объединение:
+          - полей с явным @onchange-декоратором;
+          - полей-триггеров из @depends (через _cache_compute_by_dep.keys()).
+            Фронт должен следить и за ними, чтобы при изменении price_unit
+            автоматически шёл /onchange и приходили пересчитанные
+            price_subtotal / price_tax / price_total и т.д.
 
-        Returns:
-            Список имён полей с onchange обработчиками
+        Используется фронтендом для определения за какими полями следить.
         """
         fields_with_onchange = set()
 
         for attr_name in dir(cls):
-            # Пропускаем dunder методы
             if attr_name.startswith("__"):
                 continue
             attr = getattr(cls, attr_name, None)
             if attr and callable(attr) and hasattr(attr, "_is_onchange"):
                 onchange_fields = getattr(attr, "_onchange_fields", ())
                 fields_with_onchange.update(onchange_fields)
+
+        # Поля-триггеры всех @depends-методов модели — фронту нужно
+        # дёрнуть /onchange при их изменении, чтобы получить свежие
+        # значения computed-полей (price_subtotal и т.д.).
+        fields_with_onchange.update(cls._cache_compute_by_dep.keys())
 
         return list(fields_with_onchange)
 
@@ -855,25 +1102,45 @@ class DotModel(
 
     async def execute_onchange(self, field_name: str) -> dict:
         """
-        Выполнить все onchange обработчики для указанного поля.
+        Выполнить onchange обработчики для указанного поля.
+
+        Делает ДВА прохода:
+          1. Явные @onchange-handlers — для пользовательской логики
+             ("при выборе product подставить product_uom_id").
+          2. Recompute @depends-методов, чьи триггеры содержат field_name —
+             через тот же движок, что и в CRUD-пути. Compute читает
+             self.tax_id.amount / self.order_line_ids и т.п. через
+             _ensure_prefetch_for_method.
 
         Перед вызовом self должен быть заполнен текущими значениями формы.
 
-        Args:
-            field_name: Имя изменённого поля
-
         Returns:
-            Объединённый dict со значениями для обновления формы
+            Объединённый dict со значениями для обновления формы.
+            Включает и поля изменённые @onchange-handler'ами, и
+            пересчитанные @depends computed-поля (price_subtotal и т.п.).
         """
-        result = {}
-        handlers = self._get_onchange_handlers(field_name)
+        result: dict = {}
 
-        for handler_name in handlers:
+        # 1. @onchange handlers — кастомная логика пользователя.
+        for handler_name in self._get_onchange_handlers(field_name):
             handler: Awaitable | None = getattr(self, handler_name, None)
             if handler and callable(handler):
                 handler_result = await handler()
                 if handler_result:
                     result.update(handler_result)
+
+        # 2. @depends recompute — пересчёт computed-полей по триггеру.
+        cls = self.__class__
+        if cls._cache_has_compute_methods:
+            written = await self.recompute(changed={field_name})
+            for name in written:
+                value = getattr(self, name, None)
+                # Под non-data Field-descriptor (Variant C) getattr на
+                # non-assigned поле уже возвращает None, а не Field.
+                # Безопасно включаем любое значение, кроме явно
+                # ничего-не-делающего None.
+                if value is not None:
+                    result[name] = value
 
         return result
 

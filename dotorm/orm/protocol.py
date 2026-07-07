@@ -98,6 +98,7 @@ class DotModelProtocol(Protocol):
         payload: Self,
         fields: Any = None,
         session: Any = None,
+        depends_jobs: Any = None,
     ) -> Any: ...
 
     # From OrmMany2manyMixin

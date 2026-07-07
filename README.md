@@ -149,6 +149,39 @@ Role._no_transaction = container.get_no_transaction_session()
 await container.create_and_update_tables([Role, User])
 ```
 
+> **Note.** The query builder, field cache and `@depends` trigger tables are
+> built **automatically** when a model class is defined — no manual wiring
+> needed. Just bind `_pool` / `_no_transaction` as above.
+
+### Access control (optional)
+
+By default DotORM is **permissive** — CRUD works out of the box, **no session
+required**. Access control is **opt-in**: install a checker whose
+`require_session = True` and DotORM switches to **default-deny** — every CRUD
+call then needs an access session in the current context, or raises
+`AccessDenied` (this is how FARA CRM runs, guarding against a forgotten auth
+check leaking data).
+
+```python
+from dotorm import (
+    set_access_checker, set_access_session, SystemSession, AccessChecker,
+)
+
+class MyChecker(AccessChecker):
+    require_session = True          # turn on default-deny
+    # override check_access() / check_field_access() with your policy
+
+set_access_checker(MyChecker())
+set_access_session(SystemSession())   # full-access session
+```
+
+Sessions live in a `contextvars.ContextVar`, so set one **per request / task /
+thread** — in async code that spawns tasks, set it at the start of each task
+(contextvars don't cross task boundaries automatically). Built-in
+`SystemSession` (full access) and `AnonymousSession` (public, no user) are ready
+to use; your checker reads whatever the session carries (user id, roles,
+tenant).
+
 ---
 
 ## 📖 Usage Examples

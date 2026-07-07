@@ -1,5 +1,6 @@
 """Pydantic integration for DotORM models."""
 
+import base64
 from types import UnionType
 from typing import (
     Annotated,
@@ -15,35 +16,93 @@ from typing import (
 )
 
 try:
-    from pydantic import BaseModel, ConfigDict, Field, create_model
+    from pydantic import (
+        BaseModel,
+        BeforeValidator,
+        ConfigDict,
+        Field,
+        create_model,
+    )
 except ImportError:
     print("pydantic lib not installed")
 
 from ..fields import (
+    Binary,
     Many2many,
     One2many,
     Field as DotField,
 )
 
 
+# ---- Кастомный тип для Binary-полей ------------------------------------
+# Base64DecodedBytes — асимметричная семантика:
+#   - на input (validate): base64-строка → bytes (реально декодирует).
+#     Также принимает bytes as-is — для совместимости с внутренними
+#     вызовами, где данные уже в бинарной форме.
+#   - на output (serialize, mode='python'): bytes → bytes как есть,
+#     БЕЗ обратного base64-кодирования.
+#
+# Готовый pydantic.Base64Bytes не подходит: он симметричный, и при
+# model_dump() кодирует bytes обратно в base64 (для роунд-трипа).
+# В auto-CRUD есть код вида Model(**payload.model_dump()), и если
+# использовать Base64Bytes — в ORM-модель попадает base64-строка вместо
+# настоящих байт.
+def _decode_base64_input(v):
+    """Принять base64-строку или bytes — вернуть bytes."""
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return bytes(v)
+    if isinstance(v, str):
+        try:
+            return base64.b64decode(v)
+        except Exception as e:
+            raise ValueError(f"Invalid base64 content: {e}") from e
+    if v is None:
+        return None
+    raise TypeError(
+        f"Base64DecodedBytes expects str or bytes-like, got {type(v).__name__}"
+    )
+
+
+Base64DecodedBytes = Annotated[
+    bytes,
+    BeforeValidator(_decode_base64_input),
+    # PlainSerializer(lambda b: b, return_type=bytes, when_used="always"),
+]
+
+
 def dotorm_to_pydantic_nested_one(cls):
     """Работает с моделями DotOrm.
     Которая возвращает все поля модели.
     Используется на вход get и create_default
-    Прерывается на первом уровне вложенности"""
+    Прерывается на первом уровне вложенности.
+
+    Имена классов содержат имя модели — это обеспечивает:
+    - уникальность схем в Swagger (не дубликаты SchemaGetInput)
+    - правильное кэширование в SchemaRegistry
+    """
     fields_store = []
     fields_relation = []
 
     # Используем get_all_fields() чтобы получить поля включая добавленные через @extend
     for field_name, field in cls.get_all_fields().items():
         if isinstance(field, DotField):
-            if not isinstance(field, (Many2many, One2many)):
-                fields_store.append(field_name)
+            # private=True — поле скрыто из API-схемы (нельзя запрашивать
+            # через fields=... в GET-запросе, нельзя получить в response)
+            if getattr(field, "private", False):
+                continue
 
-            else:
-                # если это поле множественной связи m2m или o2m
-                # то это поле будет содержать просто список своих полей
-                allowed_fields = list(field.relation_table.get_all_fields())
+            fields_store.append(field_name)
+
+            if isinstance(field, (Many2many, One2many)):
+                # Дополнительно — schema для dict-формы
+                # {field_name: [nested_field, ...]}, чтобы клиент мог
+                # запросить вложенные поля связанной модели одним
+                # запросом.
+                allowed_fields = [
+                    fname
+                    for fname, fobj in field.relation_table.get_all_fields().items()
+                    if not getattr(fobj, "private", False)
+                ]
                 # TODO: по идее должно быть так
                 # relation_table = field.relation_table
                 # if callable(relation_table):
@@ -51,14 +110,14 @@ def dotorm_to_pydantic_nested_one(cls):
                 # allowed_fields = list(relation_table.get_all_fields())
                 params = {field_name: (list[Literal[*allowed_fields]], ...)}
                 SchemaGetFieldRelationInput = create_model(
-                    "SchemaGetFieldRelationInput",
+                    f"{cls.__name__}Get_{field_name}_RelationInput",
                     **params,
                     # field_name=(list[Literal[*allowed_fields]], ...),
                 )
                 fields_relation.append(SchemaGetFieldRelationInput)
 
     return create_model(
-        "SchemaGetInput",
+        f"{cls.__name__}GetInput",
         fields=(list[Union[Literal[*fields_store], *fields_relation]], ...),
     )
 
@@ -103,8 +162,20 @@ def convert_field_type(
 ):
     """
     Оборачиваем тип в Annotated и корректно обрабатываем None.
+
+    Специальный случай для Binary-полей: на HTTP-границе бинарные
+    данные передаются base64-строкой. Подменяем тип на
+    Base64DecodedBytes — он декодит base64 на входе и возвращает
+    сырые bytes на выходе model_dump (без обратного кодирования).
+    Это важно, потому что в auto-CRUD payload сериализуется через
+    model_dump перед передачей в ORM, и двойная сериализация
+    (base64 → bytes → base64) сломала бы контент.
     """
     final_type = replace_custom_types(py_type, class_map)
+
+    # Binary field → Base64DecodedBytes (см. docstring модуля).
+    if isinstance(field_value, Binary):
+        final_type = Base64DecodedBytes
 
     # --- определяем, допускает ли поле None ---
     allows_none = False

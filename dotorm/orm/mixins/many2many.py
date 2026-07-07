@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-from ...fields import PolymorphicMany2one, Field, Many2many, Many2one, One2many
+from ...fields import PolymorphicMany2one, Many2many, Many2one, One2many
 from ...decorators import hybridmethod
 from ..utils import execute_maybe_parallel
 
@@ -145,17 +145,12 @@ class OrmMany2manyMixin(_Base):
                 result_by_id = {
                     res_model.id: res_model for res_model in result
                 }
-                # Map related objects to records
+                # Map related objects to records. Под non-data Field-descriptor
+                # getattr на не-назначенном поле возвращает None — отдельная
+                # ветка «is Field» не нужна, result_by_id.get(None) тоже None.
                 for rec in records:
-                    rec_field_raw = getattr(rec, req.field_name)
-                    if isinstance(rec_field_raw, Field):
-                        setattr(rec, req.field_name, None)
-                    else:
-                        setattr(
-                            rec,
-                            req.field_name,
-                            result_by_id.get(rec_field_raw),
-                        )
+                    fk_id = getattr(rec, req.field_name)
+                    setattr(rec, req.field_name, result_by_id.get(fk_id))
 
             if isinstance(req.field, One2many):
                 # Build lookup: parent_id → [children]

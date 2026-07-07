@@ -148,6 +148,39 @@ Role._no_transaction = container.get_no_transaction_session()
 await container.create_and_update_tables([Role, User])
 ```
 
+> **Примечание.** SQL-билдер, кэш полей и таблицы триггеров `@depends`
+> строятся **автоматически** при определении класса модели — ручная проводка
+> не нужна. Достаточно привязать `_pool` / `_no_transaction`, как выше.
+
+### Контроль доступа (опционально)
+
+По умолчанию DotORM **пермиссивен** — CRUD работает из коробки, **сессия не
+нужна**. Контроль доступа **включается по желанию**: установите чекер, у
+которого `require_session = True`, и DotORM переходит в **default-deny** —
+тогда каждая CRUD-операция требует сессию в контексте, иначе `AccessDenied`
+(так работает FARA CRM — защита от забытой проверки авторизации, сливающей
+данные).
+
+```python
+from dotorm import (
+    set_access_checker, set_access_session, SystemSession, AccessChecker,
+)
+
+class MyChecker(AccessChecker):
+    require_session = True          # включить default-deny
+    # переопределите check_access() / check_field_access() своей политикой
+
+set_access_checker(MyChecker())
+set_access_session(SystemSession())   # сессия полного доступа
+```
+
+Сессия хранится в `contextvars.ContextVar`, поэтому ставьте её **на каждый
+запрос / задачу / поток** — в async-коде, который порождает задачи, ставьте её
+в начале каждой задачи (contextvars не переходят между задачами автоматически).
+Готовые `SystemSession` (полный доступ) и `AnonymousSession` (публичная, без
+пользователя) — из коробки; ваш чекер читает то, что несёт сессия (user_id,
+роли, тенант).
+
 ---
 
 ## 📖 Примеры использования

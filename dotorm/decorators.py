@@ -178,15 +178,69 @@ class hybridmethod(Generic[_T, _P, _R]):
         return self.func(*args, **kwargs)
 
 
-def depends(*field_names: str) -> Callable[[Callable], Callable]:
+def depends(
+    *positional,
+    triggers=None,
+    prefetch=None,
+    triggers_with_prefetch=None,
+) -> Callable[[Callable], Callable]:
     """
-    Декоратор для вычисляемых полей.
-    Указывает, от каких полей зависит вычисление.
-    Поддерживает вложенные зависимости.
+    Декоратор для вычисляемых (stored) полей — аналог @api.depends.
+
+    Помечает async-метод как compute-обработчик. Метод присваивает одно
+    или несколько stored-полей на self. Поля связываются с методом через
+    объявление ``compute="_имя_метода"`` в самом поле.
+
+    Принимает ДВА раздельных списка:
+
+    triggers — поля, при изменении которых метод пересчитывается:
+        • локальный скаляр / M2O    → пересчёт этой же модели;
+        • dotted через O2M/M2M
+          ("order_line_ids.price_subtotal" / (order_line_ids, "price_subtotal"))
+          → cross-model: пересчёт родителя при изменении поля ребёнка.
+
+    prefetch — relation-поля, которые движок ДОГРУЗИТ на self ПЕРЕД
+        запуском compute (чтобы читать self.tax_id.amount /
+        self.order_line_ids[i].price_subtotal без fetch'ей внутри):
+        • dotted M2O   ("tax_id.amount" / (tax_id, "amount"))
+        • dotted O2M/M2M
+
+    triggers_with_prefetch — шорткат: элементы попадают И в triggers,
+        И в prefetch. Удобно для O2M-аггрегаций родителя, где одно и то
+        же поле и триггерит, и подгружается.
+
+    Каждый элемент списков может быть:
+        • строкой:        "price_unit", "tax_id.amount"
+        • Field-объектом: price_unit, tax_id (typo ловится NameError'ом)
+        • кортежем:       (tax_id, "amount") — head Field + tail-строка
+
+    Обратная совместимость: позиционные аргументы трактуются как triggers
+    (старый стиль ``@depends("a", "b")`` продолжает работать).
+
+    Пример::
+
+        @depends(
+            triggers=[price_unit, product_uom_qty, discount, tax_id],
+            prefetch=[(tax_id, "amount")],
+        )
+        async def _compute_amount(self): ...
+
+        @depends(triggers_with_prefetch=[
+            (order_line_ids, "price_subtotal"),
+            (order_line_ids, "price_tax"),
+        ])
+        async def _compute_amounts(self): ...
     """
 
     def decorator(func: Callable) -> Callable:
-        func.compute_deps = set(field_names)
+        shared = list(triggers_with_prefetch or [])
+        all_triggers = list(positional) + list(triggers or []) + shared
+        all_prefetch = list(prefetch or []) + shared
+        # Сырые элементы (Field / tuple / str). Резолв в имена-строки —
+        # в _build_compute_cache, когда у Field уже проставлен .name.
+        func._compute_deps_triggers = tuple(all_triggers)  # type: ignore
+        func._compute_deps_prefetch = tuple(all_prefetch)  # type: ignore
+        func._is_compute = True  # type: ignore[attr-defined]
         return func
 
     return decorator
@@ -308,7 +362,7 @@ def depends(*field_names: str) -> Callable[[Callable], Callable]:
 
 
 # Экспортируем декораторы
-__all__ = ["hybridmethod", "onchange"]
+__all__ = ["hybridmethod", "onchange", "depends"]
 
 
 def onchange(*fields: str):
