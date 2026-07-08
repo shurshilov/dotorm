@@ -1142,13 +1142,13 @@ Field(
 
 <p align="center">
   <a href="https://github.com/shurshilov">
-    <img src="https://img.shields.io/badge/GitHub-@artem--shurshilov-181717?style=flat&logo=github" alt="GitHub">
+    <img src="https://img.shields.io/badge/GitHub-@shurshilov-181717?style=flat&logo=github" alt="GitHub">
   </a>
   <a href="https://t.me/eurodoo">
-    <img src="https://img.shields.io/badge/Telegram-@artem__shurshilov-26A5E4?style=flat&logo=telegram" alt="Telegram">
+    <img src="https://img.shields.io/badge/Telegram-@eurodoo-26A5E4?style=flat&logo=telegram" alt="Telegram">
   </a>
   <a href="mailto:shurshilov.a.a@gmail.com">
-    <img src="https://img.shields.io/badge/Email-artem.shurshilov-EA4335?style=flat&logo=gmail" alt="Email">
+    <img src="https://img.shields.io/badge/Email-shurshilov.a.a@gmail.com-EA4335?style=flat&logo=gmail" alt="Email">
   </a>
 </p>
 
