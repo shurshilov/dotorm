@@ -12,6 +12,7 @@ from ..fields import (
     Many2many,
     Many2one,
     One2many,
+    One2one,
 )
 
 
@@ -50,6 +51,7 @@ class RequestBuilder:
     _PREPARE_FUNCS: ClassVar[dict[type, str]] = {
         Many2many: "prepare_list_ids",
         One2many: "prepare_list_ids",
+        One2one: "prepare_list_ids",
         Many2one: "prepare_list_ids",
         PolymorphicMany2one: "prepare_list_ids",
         PolymorphicOne2many: "prepare_list_ids",
@@ -76,7 +78,7 @@ class RequestBuilder:
         # TODO: помоему тут ошибка relation_table всегда будет пустое
         # а реквест билдер всеравно не используется в не связей
         # и else никогда не вызывается
-        return getattr(self.field.relation_table, "prepare_list_id")
+        return self.field.relation_table.prepare_list_id
 
 
 def create_request_builder(

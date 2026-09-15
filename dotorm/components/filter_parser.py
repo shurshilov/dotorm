@@ -5,9 +5,13 @@ Converts filter expressions to SQL WHERE clauses.
 Extracted to avoid code duplication in builders.
 """
 
-from typing import Any, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 from .dialect import Dialect
+
+if TYPE_CHECKING:
+    from ..fields import Field
+
 
 # Type definitions
 SQLOperator = Literal[
@@ -111,8 +115,13 @@ class FilterParser:
         # values: (True, "admin", True)
     """
 
-    def __init__(self, dialect: Dialect):
+    def __init__(
+        self, dialect: Dialect, fields: dict[str, "Field"] | None = None
+    ):
         self.dialect = dialect
+        # Поля модели — чтобы значение приводило само поле (to_sql_filter):
+        # в JSON нет дат, они приезжают строками, а драйверу нужен datetime.
+        self.fields = fields or {}
 
     def _is_triplet(self, expr: Any) -> bool:
         """Check if expression is a simple triplet."""
@@ -143,8 +152,18 @@ class FilterParser:
 
         # Simple triplet: ("field", "op", value)
         if self._is_triplet(filter_expr):
-            field, op, value = filter_expr
-            field = f"{escape}{field}{escape}"
+            name, op, value = filter_expr
+            if self.fields:
+                # Имя подставляется в SQL как идентификатор, поэтому ОБЯЗАНО
+                # быть не-private полем модели (единая проверка для всех
+                # фильтров: API, rules-домены, домены папок чата).
+                model_field = self.fields.get(name)
+                if model_field is None or model_field.private:
+                    raise ValueError(
+                        f"Unknown or private filter field: {name!r}"
+                    )
+                value = model_field.to_sql_filter(value)
+            field = f"{escape}{name}{escape}"
             assert isinstance(op, str)
             op = op.lower()
 

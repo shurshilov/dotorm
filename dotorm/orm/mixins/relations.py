@@ -33,6 +33,7 @@ class OrmRelationsMixin(_Base):
 
     Provides:
     - search - search records with relation loading
+    - search_one - first record matching filter or None
     - search_count - count records matching filter
     - exists - have one record or not
     - _get_load_relations - load relations for single record (used by get())
@@ -55,7 +56,7 @@ class OrmRelationsMixin(_Base):
     async def search(
         self,
         fields: list[str] | None = None,
-        fields_nested: dict[str, list[str]] | None = None,
+        fields_nested: dict[str, dict] | None = None,
         start: int | None = None,
         end: int | None = None,
         limit: int | None = None,
@@ -128,18 +129,58 @@ class OrmRelationsMixin(_Base):
             stmt, values, prepare=prepare
         )
 
-        # если есть хоть одна запись и вообще нужно читать поля связей
+        # если есть хоть одна запись и вообще нужно читать поля связей;
+        # raw — сырые словари из SQL, связи на них не догружаются
         fields_relation = [
             (name, field)
             for name, field in cls.get_relation_fields()
             if name in fields
         ]
-        if records and fields_relation:
+        if records and fields_relation and not raw:
             await cls._records_list_get_relation(
                 session, fields_relation, records, fields_nested
             )
 
         return records
+
+    @hybridmethod
+    async def search_one(
+        self,
+        fields: list[str] | None = None,
+        fields_nested: dict[str, dict] | None = None,
+        order: Literal["DESC", "ASC", "desc", "asc"] | None = None,
+        sort: str | None = None,
+        filter: FilterExpression | None = None,
+        raw: bool = False,
+        session=None,
+    ) -> Self | None:
+        """
+        Первая запись по фильтру или None.
+
+        То же, что search(..., limit=1) плюс проверка «список не пуст» на
+        стороне вызывающего: LIMIT 1 ставится здесь, наружу уходит сама
+        запись. Какая запись «первая», задают sort/order (по умолчанию —
+        как у search).
+
+        Example:
+            storage = await AttachmentStorage.search_one(
+                filter=[("active", "=", True)]
+            )
+            if storage is None:
+                ...
+        """
+        cls = self.__class__
+        records = await cls.search(
+            fields=fields,
+            fields_nested=fields_nested,
+            limit=1,
+            order=order,
+            sort=sort,
+            filter=filter,
+            raw=raw,
+            session=session,
+        )
+        return records[0] if records else None
 
     @hybridmethod
     async def search_count(
@@ -208,7 +249,7 @@ class OrmRelationsMixin(_Base):
         cls,
         record,
         fields: list[str],
-        fields_nested: dict[str, list[str]],
+        fields_nested: dict[str, dict],
         session,
     ):
         """
@@ -244,8 +285,12 @@ class OrmRelationsMixin(_Base):
             relation_table = field.relation_table
             relation_table_field = field.relation_table_field
 
-            # Определяем какие поля вложенной модели загружать
-            nested = fields_nested.get(name)
+            # Определяем какие поля вложенной модели загружать. Элемент
+            # fields_nested — {"fields", "filter"}; фильтр запроса
+            # складывается с Field.filter (Field.nested_filter).
+            nested_raw = fields_nested.get(name)
+            nested = field.nested_fields(nested_raw)
+            relation_filter = field.nested_filter(nested_raw)
             if nested:
                 fields_select = nested
             elif relation_table:
@@ -254,6 +299,9 @@ class OrmRelationsMixin(_Base):
                     fields_select.append("name")
                 if isinstance(field, PolymorphicMany2one):
                     fields_select = relation_table.get_store_fields_omit_m2o()
+                # O2O продолжение записи: по умолчанию все её поля
+                if isinstance(field, One2one):
+                    fields_select = relation_table.get_store_fields()
             else:
                 continue
 
@@ -284,6 +332,7 @@ class OrmRelationsMixin(_Base):
                         column2=field.column2,
                         fields=fields_select,
                         limit=None,
+                        filter=relation_filter,
                     )
                 )
                 request_meta.append((name, "m2m"))
@@ -296,7 +345,10 @@ class OrmRelationsMixin(_Base):
                 execute_list.append(
                     relation_table.search(
                         fields=fields_select,
-                        filter=[(relation_table_field, "=", record.id)],
+                        filter=[
+                            (relation_table_field, "=", record.id),
+                            *relation_filter,
+                        ],
                         limit=1000,
                     )
                 )
@@ -309,6 +361,7 @@ class OrmRelationsMixin(_Base):
                         filter=[
                             ("res_id", "=", record.id),
                             ("res_model", "=", record.__table__),
+                            *relation_filter,
                         ],
                         limit=1000,
                     )
@@ -409,6 +462,10 @@ class OrmRelationsMixin(_Base):
                 field_obj = getattr(payload, name)
 
                 if isinstance(field, One2one):
+                    # из API связь приходит словарём полей связанной записи,
+                    # как created у One2many
+                    if isinstance(field_obj, dict):
+                        field_obj = field.relation_table(**field_obj)
                     params = {
                         "limit": 1,
                         "fields": ["id"],
@@ -517,7 +574,7 @@ class OrmRelationsMixin(_Base):
                     if field_obj.get("unselected"):
                         request_list.append(
                             self.unlink_many2many(
-                                field, field_obj["unselected"]
+                                field, field_obj["unselected"], self.id
                             )
                         )
 

@@ -76,6 +76,21 @@ class Field[FieldType]:
     indexable: bool = True
     store: bool = True
     default: FieldType | None = None
+    # Копировать ли значение при дублировании записи (метаданные для
+    # API-слоя, как private/schema_required; сама логика — copy_record в
+    # dotorm_crud_auto). По умолчанию да; One2many, полиморфные вложения и
+    # One2one — нет (переопределено в классах полей), явный copy=... в
+    # объявлении поля сильнее.
+    copy: bool = True
+    # Доп. условия на связанные записи (тот же формат, что filter у
+    # search), объявляются в Python на поле. Читают их все загрузчики
+    # связей — One2many/One2one/PolymorphicOne2many/Many2many (search/get)
+    # и счётчики автокруда; у скаляров всегда None. Так одна таблица детей
+    # даёт несколько полей-срезов: все активности / только просроченные.
+    # Клиент может сузить срез своим фильтром на запрос (fields_nested
+    # {name: {"fields": [...], "filter": [...]}}) — он складывается с этим
+    # по И, см. Field.nested_filter.
+    filter: list | None = None
 
     string: str = ""
     options: list[str] | None = None
@@ -83,6 +98,10 @@ class Field[FieldType]:
     relation: bool = False
     relation_table_field: str | None = None
     _relation_table: Type["DotModel"] | None = None
+
+    # Позволяет подменить тип для всех полей класса в API-схемах
+    # (integrations/*). Переопределяет тип из аннотации. None — не меняется.
+    schema_type: type | None = None
 
     # Field-level access (см. required_roles). Карта операция → коды ролей,
     # которым разрешена операция над полем. Пусто = без ограничений.
@@ -115,6 +134,8 @@ class Field[FieldType]:
 
         self.indexable = kwargs.pop("indexable", self.indexable)
         self.store = kwargs.pop("store", self.store)
+        self.copy = kwargs.pop("copy", self.copy)
+        self.filter = kwargs.pop("filter", self.filter)
 
         # ondelete - явное указание действия при удалении родительской записи
         # Если не указано явно, определяется автоматически на основе null
@@ -157,6 +178,16 @@ class Field[FieldType]:
             if raw:
                 acl[op] = [c.strip() for c in raw.split(",") if c.strip()]
         return acl
+
+    def nested_filter(self, nested: "dict | None") -> list:
+        """Итоговый фильтр на связанные записи для одного запроса."""
+        extra = nested.get("filter") if nested else None
+        return [*(self.filter or []), *(extra or [])]
+
+    @staticmethod
+    def nested_fields(nested: "dict | None") -> list[str] | None:
+        """Имена вложенных полей из элемента fields_nested."""
+        return (nested.get("fields") or None) if nested else None
 
     def required_roles(self, operation: str) -> list[str] | None:
         """Коды ролей, которым разрешена операция над полем, либо None.
@@ -213,6 +244,15 @@ class Field[FieldType]:
         тогда никакая логика конкретных типов полей не утекает в билдер.
         """
         return f"{field_name}=%s", value
+
+    def to_sql_filter(self, value: Any) -> Any:
+        """Значение из фильтра → bind-value. По умолчанию как есть.
+
+        Симметрично to_sql_update, но для WHERE: в фильтре значение приходит
+        из JSON (тип теряется), а типы полей знает только само поле —
+        см. Datetime/Date.
+        """
+        return value
 
     @staticmethod
     def _can_apply_to_db(default: Any) -> bool:
@@ -519,11 +559,27 @@ class Datetime(Field[datetime.datetime]):
     class _db_postgres:
         sql_type = "TIMESTAMPTZ"
 
+    def to_sql_filter(self, value: Any) -> Any:
+        """ISO-строка из фильтра → datetime (драйвер строку не примет).
+
+        Без смещения считаем время локальным.
+        """
+        if not isinstance(value, str):
+            return value
+        parsed = datetime.datetime.fromisoformat(value)
+        return parsed if parsed.tzinfo else parsed.astimezone()
+
 
 class Date(Field[datetime.date]):
     """Date field."""
 
     sql_type = "DATE"
+
+    def to_sql_filter(self, value: Any) -> Any:
+        """ISO-строка из фильтра → date (принимаем и дату-время)."""
+        if not isinstance(value, str):
+            return value
+        return datetime.datetime.fromisoformat(value).date()
 
 
 class Time(Field[datetime.time]):
@@ -602,9 +658,16 @@ class TranslatedChar(JSONField):
 
         Контракт: session должен реализовать метод get_lang() -> str.
         Если сессии нет (фон, post_init, cron) — возвращает 'en'.
+
+        Код языка попадает в SQL-путь jsonb_set (to_sql_update) как литерал,
+        поэтому валидируем: только буквы/цифры/-/_ , иначе 'en'. Защита от
+        инъекции через language.code (значение правит админ).
         """
         session = get_access_session()
-        return session.get_lang() if session else "en"
+        code = session.get_lang() if session else "en"
+        if code and code.replace("-", "").replace("_", "").isalnum():
+            return code
+        return "en"
 
     def deserialization(self, value):
         """JSON-строка из БД → строка для текущего языка пользователя.
@@ -708,6 +771,7 @@ class PolymorphicMany2one[T: DotModel](Field[T]):
     sql_type = "INTEGER"
     relation = True
     relation_table: Type["DotModel"]
+    copy = False
 
     def __init__(
         self, relation_table: Type["DotModel"], **kwargs: Any
@@ -722,6 +786,7 @@ class PolymorphicOne2many[T: DotModel](Field[list[T]]):
     field_type = list[Type]
     store = False
     relation = True
+    copy = False
     relation_table: Type["DotModel"]
     relation_table_field: str
 
@@ -850,6 +915,7 @@ class One2many[T: DotModel](Field[list[T]]):
     field_type = list[Type]
     store = False
     relation = True
+    copy = False
     relation_table: Type["DotModel"]
     relation_table_field: str
 
@@ -870,6 +936,7 @@ class One2one[T: DotModel](Field[T]):
     field_type = Type
     store = False
     relation = True
+    copy = False
     relation_table: Type["DotModel"]
 
     def __init__(

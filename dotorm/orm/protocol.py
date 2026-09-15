@@ -117,6 +117,7 @@ class DotModelProtocol(Protocol):
         sort: str = "id",
         limit: int | None = 10,
         session: Any = None,
+        filter: list | None = None,
     ) -> list[Any]: ...
 
     @classmethod
@@ -132,6 +133,7 @@ class DotModelProtocol(Protocol):
         cls,
         field: Any,
         ids: list,
+        owner_id: int,
         session: Any = None,
     ) -> Any: ...
 
@@ -141,7 +143,7 @@ class DotModelProtocol(Protocol):
         session: Any,
         fields_relation: list[tuple[str, "Field"]],
         records: list[Any],
-        fields_nested: dict[str, list[str]] | None = None,
+        fields_nested: dict[str, dict] | None = None,
     ) -> None: ...
 
     # From OrmRelationsMixin
@@ -150,7 +152,7 @@ class DotModelProtocol(Protocol):
         cls,
         record: Any,
         fields: list[str],
-        fields_nested: dict[str, list[str]],
+        fields_nested: dict[str, dict],
         session: Any,
     ) -> None: ...
 

@@ -9,7 +9,14 @@ if TYPE_CHECKING:
 else:
     _Base = object
 
-from ...fields import PolymorphicMany2one, Many2many, Many2one, One2many
+from ...fields import (
+    PolymorphicMany2one,
+    Many2many,
+    Many2one,
+    One2many,
+    One2one,
+    PolymorphicOne2many,
+)
 from ...decorators import hybridmethod
 from ..utils import execute_maybe_parallel
 
@@ -47,6 +54,7 @@ class OrmMany2manyMixin(_Base):
         sort: str = "id",
         limit: int | None = 10,
         session=None,
+        filter: list | None = None,
     ):
         if not fields:
             fields = []
@@ -69,6 +77,7 @@ class OrmMany2manyMixin(_Base):
             end,
             sort,
             limit,
+            filter=filter,
         )
         records = await session.execute(
             stmt, values, prepare=comodel.prepare_list_ids
@@ -90,24 +99,51 @@ class OrmMany2manyMixin(_Base):
     async def link_many2many(
         self, field: Many2many, values: list, session=None
     ):
-        """Link records in M2M relation."""
+        """Link records in M2M relation.
+
+        Идемпотентно: ON CONFLICT DO NOTHING (Postgres) и INSERT IGNORE (MySQL)
+        отбрасывают пары, которые уже есть в связующей таблице (защита от
+        дублей - сидеры на каждом старте, повторные e2e-прогоны, повторная
+        привязка той же пары)
+        """
         cls = self.__class__
         session = cls._get_db_session(session)
+        if not values:
+            return None
         query_placeholders = ", ".join(["%s"] * len(values[0]))
-        stmt = f"""INSERT INTO {field.many2many_table}
+        if cls._dialect.name == "postgres":
+            verb, on_conflict = "INSERT", "ON CONFLICT DO NOTHING"
+        else:
+            verb, on_conflict = "INSERT IGNORE", ""
+        stmt = f"""{verb} INTO {field.many2many_table}
         ({field.column2}, {field.column1})
         VALUES
         ({query_placeholders})
+        {on_conflict}
         """
-        return await session.execute(stmt, [values], cursor="executemany")
+        # список строк-кортежей, как в контракте session.execute
+        return await session.execute(stmt, values, cursor="executemany")
 
     @classmethod
-    async def unlink_many2many(cls, field: Many2many, ids: list, session=None):
-        """Unlink records from M2M relation."""
+    async def unlink_many2many(
+        cls, field: Many2many, ids: list, owner_id: int, session=None
+    ):
+        """Отвязать записи M2M ТОЛЬКО у конкретного владельца (owner_id).
+
+        owner_id обязателен: без условия по column2 (сторона владельца)
+        DELETE снимал связь у ВСЕХ записей. Например
+        `user.update(role_ids={"unselected":[r]})` удалял роль r у всех
+        пользователей, а не только у этого (column1=related, column2=owner —
+        см. link_many2many, кладущий self.id в column2)."""
+        if not ids:
+            return None
         session = cls._get_db_session(session)
         args: str = ",".join(["%s"] * len(ids))
-        stmt = f"DELETE FROM {field.many2many_table} WHERE {field.column1} in ({args})"
-        return await session.execute(stmt, ids)
+        stmt = (
+            f"DELETE FROM {field.many2many_table} "
+            f"WHERE {field.column1} in ({args}) AND {field.column2} = %s"
+        )
+        return await session.execute(stmt, [*ids, owner_id])
 
     @classmethod
     async def _records_list_get_relation(
@@ -115,7 +151,7 @@ class OrmMany2manyMixin(_Base):
         session,
         fields_relation,
         records,
-        fields_nested: dict[str, list[str]] | None = None,
+        fields_nested: dict[str, dict] | None = None,
     ):
         """Load relations for a list of records (batch)."""
         cls._dialect
@@ -152,21 +188,23 @@ class OrmMany2manyMixin(_Base):
                     fk_id = getattr(rec, req.field_name)
                     setattr(rec, req.field_name, result_by_id.get(fk_id))
 
-            if isinstance(req.field, One2many):
+            # PolymorphicOne2many — как One2many: relation_table_field = res_id
+            if isinstance(req.field, (One2many, One2one, PolymorphicOne2many)):
                 # Build lookup: parent_id → [children]
-                o2m_map: dict[int, list] = {}
+                children: dict[int, list] = {}
                 for res_model in result:
                     parent_id = getattr(
                         res_model, req.field.relation_table_field
                     )
-                    o2m_map.setdefault(parent_id, []).append(res_model)
+                    children.setdefault(parent_id, []).append(res_model)
                 # Map to records
                 for rec in records:
-                    # old_value = getattr(rec, req.field_name)
-                    # if isinstance(old_value, Field):
-                    #     setattr(rec, req.field_name, o2m_map.get(rec.id, []))
-                    # else:
-                    setattr(rec, req.field_name, o2m_map.get(rec.id, []))
+                    rows = children.get(rec.id, [])
+                    if isinstance(req.field, One2one):
+                        # одна строка на запись: объект или None
+                        setattr(rec, req.field_name, rows[0] if rows else None)
+                    else:
+                        setattr(rec, req.field_name, rows)
 
             if isinstance(req.field, Many2many):
                 # Build lookup: parent_id → [related]
